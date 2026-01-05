@@ -78,33 +78,25 @@ export async function analyzeWithFlorence(
 
   const replicate = new Replicate({ auth: REPLICATE_API_TOKEN });
 
-  const prompt = `<DETAILED_CAPTION>
-Analyze this clothing item in detail. Describe:
-- Primary and secondary colors (use specific color names)
-- Pattern type (solid, striped, plaid, floral, geometric, abstract, etc.)
-- Material/fabric appearance (cotton, denim, silk, wool, leather, synthetic, etc.)
-- Style attributes (casual, formal, sporty, bohemian, minimalist, etc.)
-- Fit type if discernible (slim, regular, oversized, cropped, etc.)
-- Notable design elements (buttons, zippers, pockets, embellishments, etc.)`;
-
   console.log(`[AI] Calling Florence-2 for vision analysis`);
 
   const output = await replicate.run(
-    "lucataco/florence-2-large:f59f69cdc1fd14f2bbae2c8e0bc19de4516988ad6e04a128e2bbf1fc02a4dcbb",
+    "lucataco/florence-2-large:da53547e17d45b9cfb48174b2f18af8b83ca020fa76db62136bf9c6616762595",
     {
       input: {
         image: imageUrl,
-        task_type: "detailed_caption",
+        task_input: "More Detailed Caption",
       },
     }
   );
 
-  // Florence-2 returns the caption in the output
+  // Florence-2 returns { results: string, ... }
   let caption = "";
-  if (typeof output === "string") {
+  if (output && typeof output === "object" && "results" in output) {
+    caption = String((output as { results: string }).results);
+  } else if (typeof output === "string") {
     caption = output;
   } else if (output && typeof output === "object") {
-    // Handle potential object response
     caption = JSON.stringify(output);
   }
 
