@@ -3,7 +3,12 @@ import { supabaseAdmin } from "../services/supabase.js";
 import { checkItemLimit, FREE_ITEM_LIMIT } from "../utils/limits.js";
 import { getUserId } from "../middleware/auth.js";
 import { itemUploadLimit } from "../middleware/rateLimit.js";
-import { removeBackground, generateEmbedding } from "../services/ai/index.js";
+import {
+  removeBackground,
+  generateEmbedding,
+  analyzeWithFlorence,
+  tagWithGemini,
+} from "../services/ai/index.js";
 
 type Variables = {
   userId: string;
@@ -14,28 +19,54 @@ const items = new Hono<{ Variables: Variables }>();
 
 /**
  * Process an item in the background:
- * 1. Remove background
- * 2. Generate embedding
- * 3. Update item in database
+ * Stage 2: Remove background (BiRefNet)
+ * Stage 3: Vision analysis (Florence-2)
+ * Stage 4: Generate embedding (FashionSigLIP)
+ * Stage 5: Reasoning & tagging (Gemini)
+ * Stage 6: Update item in database
  */
-async function processItemInBackground(itemId: string, imageUrl: string): Promise<void> {
+async function processItemInBackground(
+  itemId: string,
+  imageUrl: string
+): Promise<void> {
   try {
     console.log(`[AI] Processing item ${itemId}`);
 
-    // Step 1: Remove background
+    // Stage 2: Remove background
     const processedImageUrl = await removeBackground(imageUrl, itemId);
     console.log(`[AI] Background removed for ${itemId}`);
 
-    // Step 2: Generate embedding from processed image
+    // Stage 3: Vision analysis
+    const vision = await analyzeWithFlorence(processedImageUrl);
+    console.log(`[AI] Vision analysis complete for ${itemId}`);
+
+    // Stage 4: Generate embedding from processed image
     const embedding = await generateEmbedding(processedImageUrl);
     console.log(`[AI] Embedding generated for ${itemId}`);
 
-    // Step 3: Update item with results
+    // Stage 5: Reasoning & tagging
+    const tags = await tagWithGemini(
+      vision.raw_description,
+      vision.extracted_colors
+    );
+    console.log(`[AI] Tagging complete for ${itemId}`);
+
+    // Stage 6: Update item with ALL fields
     const { error } = await supabaseAdmin
       .from("wardrobe_items")
       .update({
         processed_image_url: processedImageUrl,
         embedding,
+        category: tags.category,
+        subcategory: tags.subcategory,
+        colors: tags.colors,
+        pattern: tags.pattern,
+        materials: tags.materials,
+        occasions: tags.occasions,
+        seasons: tags.seasons,
+        formality_score: tags.formality_score,
+        style_vibes: tags.style_vibes,
+        brand: tags.brand,
         processing_status: "completed",
       })
       .eq("id", itemId);
