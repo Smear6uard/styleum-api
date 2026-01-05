@@ -141,6 +141,7 @@ async function processItemInBackground(
         formality_score: tags.formality_score,
         style_vibes: tags.style_vibes,
         brand: tags.brand,
+        gender: tags.gender,
         processing_status: "completed",
       })
       .eq("id", itemId);

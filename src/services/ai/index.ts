@@ -5,3 +5,10 @@ export { analyzeWithFlorence } from "./visionAnalysis.js";
 export type { VisionAnalysisResult } from "./visionAnalysis.js";
 export { tagWithGemini } from "./itemTagging.js";
 export type { ItemTags } from "./itemTagging.js";
+export {
+  callOpenRouter,
+  callOpenRouterWithFallback,
+  isOpenRouterAvailable,
+  parseJsonFromLLMResponse,
+} from "./openrouter.js";
+export type { OpenRouterMessage, OpenRouterRequest } from "./openrouter.js";

@@ -19,6 +19,7 @@ export interface ItemTags {
   formality_score: number;
   style_vibes: string[];
   brand: string | null;
+  gender: "male" | "female" | "unisex";
 }
 
 const PRIMARY_MODEL = "google/gemini-2.0-flash-001";
@@ -46,7 +47,8 @@ Output ONLY valid JSON with this exact schema:
   "seasons": ["spring", "summer", "fall", "winter"],
   "formality_score": 1-10,
   "style_vibes": ["minimalist", "streetwear", "preppy", "bohemian", "classic", "edgy", "romantic", "sporty"],
-  "brand": "string (if visible, else null)"
+  "brand": "string (if visible, else null)",
+  "gender": "male|female|unisex"
 }
 
 Rules:
@@ -54,6 +56,10 @@ Rules:
 - formality_score MUST be an integer from 1 (very casual) to 10 (very formal)
 - occasions and seasons should include ALL that apply
 - style_vibes should include 1-3 that best describe the item
+- gender classification:
+  - "male" for menswear items (men's suits, dress shirts, ties, men's shorts, etc.)
+  - "female" for womenswear items (dresses, skirts, women's blouses, heels, etc.)
+  - "unisex" for gender-neutral items (plain t-shirts, hoodies, jeans, sneakers, basic accessories)
 - Output ONLY the JSON object, no markdown, no explanation`;
 
 /**
@@ -94,6 +100,7 @@ function createDefaultTags(colors: string[]): ItemTags {
     formality_score: 5,
     style_vibes: ["casual"],
     brand: null,
+    gender: "unisex",
   };
 }
 

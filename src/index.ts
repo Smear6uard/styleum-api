@@ -12,6 +12,9 @@ import gamificationRoutes from "./routes/gamification.js";
 import subscriptionsRoutes from "./routes/subscriptions.js";
 import webhooksRoutes from "./routes/webhooks.js";
 import onboardingRoutes from "./routes/onboarding.js";
+import { preGenerateOutfits } from "./jobs/preGenerate.js";
+
+const CRON_SECRET = process.env.CRON_SECRET;
 
 type Variables = {
   userId: string;
@@ -47,6 +50,41 @@ app.get("/health", (c) => {
 
 // Webhook routes (no auth)
 app.route("/webhooks", webhooksRoutes);
+
+// Cron endpoint (protected by secret)
+app.get("/cron/pre-generate", async (c) => {
+  // Verify cron secret
+  const providedSecret = c.req.header("X-Cron-Secret") || c.req.query("secret");
+
+  if (!CRON_SECRET) {
+    console.error("[Cron] CRON_SECRET not configured");
+    return c.json({ error: "Cron not configured" }, 500);
+  }
+
+  if (providedSecret !== CRON_SECRET) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  console.log("[Cron] Starting pre-generation job via HTTP trigger");
+
+  try {
+    const result = await preGenerateOutfits();
+    return c.json({
+      message: "Pre-generation completed",
+      ...result,
+    });
+  } catch (error) {
+    console.error("[Cron] Pre-generation failed:", error);
+    return c.json(
+      {
+        success: false,
+        error: "Pre-generation failed",
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
+      500
+    );
+  }
+});
 
 // Protected API routes
 const api = new Hono<{ Variables: Variables }>();
