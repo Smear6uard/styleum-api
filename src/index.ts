@@ -11,6 +11,7 @@ import outfitsRoutes from "./routes/outfits.js";
 import gamificationRoutes from "./routes/gamification.js";
 import subscriptionsRoutes from "./routes/subscriptions.js";
 import webhooksRoutes from "./routes/webhooks.js";
+import onboardingRoutes from "./routes/onboarding.js";
 
 type Variables = {
   userId: string;
@@ -54,6 +55,7 @@ api.route("/items", itemsRoutes);
 api.route("/outfits", outfitsRoutes);
 api.route("/gamification", gamificationRoutes);
 api.route("/subscriptions", subscriptionsRoutes);
+api.route("/onboarding", onboardingRoutes);
 
 app.route("/api", api);
 

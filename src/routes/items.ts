@@ -59,6 +59,7 @@ function mapItemToResponse(row: Record<string, unknown>) {
     thumbnail_url: row.thumbnail_url,
     category: row.category,
     subcategory: row.subcategory,
+    item_name: row.item_name,
 
     // Transform colors object to separate fields for Swift
     primary_color: colors?.primary ?? null,
@@ -68,7 +69,8 @@ function mapItemToResponse(row: Record<string, unknown>) {
     // Transform formality_score to formality for Swift
     formality: row.formality_score,
 
-    // Transform style_vibes to style_bucket (first vibe) for Swift
+    // Style vibes array and first vibe as style_bucket
+    style_vibes: styleVibes ?? null,
     style_bucket: styleVibes?.[0] ?? null,
 
     // Transform materials array to material string for Swift
@@ -218,7 +220,7 @@ items.post("/", itemUploadLimit, async (c) => {
   }
 
   const body = await c.req.json();
-  const { image_url } = body;
+  const { image_url, item_name } = body;
 
   if (!image_url) {
     return c.json({ error: "image_url is required" }, 400);
@@ -230,6 +232,7 @@ items.post("/", itemUploadLimit, async (c) => {
     .insert({
       user_id: userId,
       original_image_url: image_url,
+      item_name: item_name || null,
       processing_status: "processing",
       times_worn: 0,
       is_archived: false,
