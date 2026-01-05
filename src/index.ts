@@ -13,6 +13,7 @@ import subscriptionsRoutes from "./routes/subscriptions.js";
 import webhooksRoutes from "./routes/webhooks.js";
 import onboardingRoutes from "./routes/onboarding.js";
 import profileRoutes from "./routes/profile.js";
+import styleQuizRoutes from "./routes/styleQuiz.js";
 import { preGenerateOutfits } from "./jobs/preGenerate.js";
 
 const CRON_SECRET = process.env.CRON_SECRET;
@@ -96,6 +97,7 @@ api.route("/gamification", gamificationRoutes);
 api.route("/subscriptions", subscriptionsRoutes);
 api.route("/onboarding", onboardingRoutes);
 api.route("/profile", profileRoutes);
+api.route("/style-quiz", styleQuizRoutes);
 
 app.route("/api", api);
 

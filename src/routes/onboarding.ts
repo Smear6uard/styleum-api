@@ -150,6 +150,7 @@ onboarding.post("/complete", async (c) => {
     const profileUpdate: Record<string, unknown> = {
       onboarding_completed: true,
       onboarding_version: 2, // v2 = new onboarding flow with departments
+      style_quiz_completed: likedIds.length > 0 || dislikedIds.length > 0,
     };
 
     if (first_name) {
@@ -215,12 +216,13 @@ onboarding.post("/skip", async (c) => {
     return c.json({ error: "Failed to skip onboarding" }, 500);
   }
 
-  // Mark onboarding complete
+  // Mark onboarding complete (but style quiz not done)
   await supabaseAdmin
     .from("user_profiles")
     .update({
       onboarding_completed: true,
       onboarding_version: 2,
+      style_quiz_completed: false,
     })
     .eq("id", userId);
 
