@@ -44,7 +44,8 @@ export async function removeBackground(
     });
 
   if (uploadError) {
-    throw new Error(`Failed to upload processed image: ${uploadError.message}`);
+    console.error('[AI] Storage upload error:', JSON.stringify(uploadError, null, 2));
+    throw new Error(`Failed to upload processed image: ${uploadError.message || JSON.stringify(uploadError)}`);
   }
 
   // Get public URL

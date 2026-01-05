@@ -18,6 +18,37 @@ type Variables = {
 const items = new Hono<{ Variables: Variables }>();
 
 /**
+ * Map database row to API response format (ensures snake_case)
+ */
+function mapItemToResponse(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    original_image_url: row.original_image_url,
+    processed_image_url: row.processed_image_url,
+    thumbnail_url: row.thumbnail_url,
+    category: row.category,
+    subcategory: row.subcategory,
+    colors: row.colors,
+    pattern: row.pattern,
+    materials: row.materials,
+    occasions: row.occasions,
+    seasons: row.seasons,
+    formality_score: row.formality_score,
+    style_vibes: row.style_vibes,
+    brand: row.brand,
+    embedding: row.embedding,
+    times_worn: row.times_worn,
+    last_worn_at: row.last_worn_at,
+    is_archived: row.is_archived,
+    processing_status: row.processing_status,
+    processing_error: row.processing_error,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+/**
  * Process an item in the background:
  * Stage 2: Remove background (BiRefNet)
  * Stage 3: Vision analysis (Florence-2)
@@ -106,7 +137,7 @@ items.get("/", async (c) => {
     return c.json({ error: "Failed to fetch items" }, 500);
   }
 
-  return c.json({ items: data });
+  return c.json({ items: data?.map(mapItemToResponse) ?? [] });
 });
 
 // GET /:id - Fetch single item
@@ -125,7 +156,7 @@ items.get("/:id", async (c) => {
     return c.json({ error: "Item not found" }, 404);
   }
 
-  return c.json({ item: data });
+  return c.json({ item: mapItemToResponse(data) });
 });
 
 // POST / - Upload single item
@@ -174,7 +205,7 @@ items.post("/", itemUploadLimit, async (c) => {
     console.error(`[AI] Background processing failed for ${data.id}:`, err);
   });
 
-  return c.json({ item: data }, 201);
+  return c.json({ item: mapItemToResponse(data) }, 201);
 });
 
 // POST /batch - Upload multiple items (max 10)
@@ -276,7 +307,7 @@ items.post("/:id/archive", async (c) => {
     return c.json({ error: "Failed to archive item" }, 500);
   }
 
-  return c.json({ item: data });
+  return c.json({ item: mapItemToResponse(data) });
 });
 
 export default items;
