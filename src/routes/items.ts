@@ -18,9 +18,39 @@ type Variables = {
 const items = new Hono<{ Variables: Variables }>();
 
 /**
+ * Extract storage path from a Supabase storage public URL
+ */
+function extractStoragePath(url: string, bucket: string): string | null {
+  try {
+    const urlObj = new URL(url);
+    // URL format: .../storage/v1/object/public/{bucket}/{path}
+    const match = urlObj.pathname.match(
+      new RegExp(`/storage/v1/object/public/${bucket}/(.+)`)
+    );
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Map database row to API response format (ensures snake_case)
+ * Transforms AI fields to match Swift model expectations
  */
 function mapItemToResponse(row: Record<string, unknown>) {
+  // Extract colors object
+  const colors = row.colors as {
+    primary?: string;
+    secondary?: string[];
+    accent?: string;
+  } | null;
+
+  // Extract style_vibes array
+  const styleVibes = row.style_vibes as string[] | null;
+
+  // Extract materials array
+  const materials = row.materials as string[] | null;
+
   return {
     id: row.id,
     user_id: row.user_id,
@@ -29,15 +59,26 @@ function mapItemToResponse(row: Record<string, unknown>) {
     thumbnail_url: row.thumbnail_url,
     category: row.category,
     subcategory: row.subcategory,
-    colors: row.colors,
+
+    // Transform colors object to separate fields for Swift
+    primary_color: colors?.primary ?? null,
+    secondary_colors: colors?.secondary ?? null,
+    color_hex: null, // Not stored in DB
+
+    // Transform formality_score to formality for Swift
+    formality: row.formality_score,
+
+    // Transform style_vibes to style_bucket (first vibe) for Swift
+    style_bucket: styleVibes?.[0] ?? null,
+
+    // Transform materials array to material string for Swift
+    material: materials?.join(", ") ?? null,
+
+    // Keep these as-is (Swift expects same names)
     pattern: row.pattern,
-    materials: row.materials,
     occasions: row.occasions,
     seasons: row.seasons,
-    formality_score: row.formality_score,
-    style_vibes: row.style_vibes,
     brand: row.brand,
-    embedding: row.embedding,
     times_worn: row.times_worn,
     last_worn_at: row.last_worn_at,
     is_archived: row.is_archived,
@@ -272,22 +313,59 @@ items.post("/batch", itemUploadLimit, async (c) => {
   return c.json({ items: results }, 202);
 });
 
-// DELETE /:id - Delete item
+// DELETE /:id - Delete item and associated storage files
 items.delete("/:id", async (c) => {
   const userId = getUserId(c);
   const itemId = c.req.param("id");
 
-  const { error } = await supabaseAdmin
+  // Get item to find image paths
+  const { data: item, error: fetchError } = await supabaseAdmin
+    .from("wardrobe_items")
+    .select("original_image_url, processed_image_url")
+    .eq("id", itemId)
+    .eq("user_id", userId)
+    .single();
+
+  if (fetchError || !item) {
+    return c.json({ error: "Item not found" }, 404);
+  }
+
+  // Delete images from storage (best effort - don't fail if storage delete fails)
+  try {
+    // Extract path from original_image_url (wardrobe bucket)
+    if (item.original_image_url) {
+      const originalPath = extractStoragePath(item.original_image_url, "wardrobe");
+      if (originalPath) {
+        await supabaseAdmin.storage.from("wardrobe").remove([originalPath]);
+        console.log(`[Storage] Deleted original image: ${originalPath}`);
+      }
+    }
+
+    // Extract path from processed_image_url (wardrobe-items bucket)
+    if (item.processed_image_url) {
+      const processedPath = extractStoragePath(item.processed_image_url, "wardrobe-items");
+      if (processedPath) {
+        await supabaseAdmin.storage.from("wardrobe-items").remove([processedPath]);
+        console.log(`[Storage] Deleted processed image: ${processedPath}`);
+      }
+    }
+  } catch (storageErr) {
+    console.error(`[Storage] Failed to delete images for item ${itemId}:`, storageErr);
+    // Continue with database deletion even if storage fails
+  }
+
+  // Delete from database
+  const { error: deleteError } = await supabaseAdmin
     .from("wardrobe_items")
     .delete()
     .eq("id", itemId)
     .eq("user_id", userId);
 
-  if (error) {
+  if (deleteError) {
     return c.json({ error: "Failed to delete item" }, 500);
   }
 
-  return c.json({ success: true });
+  return c.body(null, 204);
 });
 
 // POST /:id/archive - Archive item
