@@ -3,6 +3,7 @@ import { supabaseAdmin } from "../services/supabase.js";
 import { checkItemLimit, FREE_ITEM_LIMIT } from "../utils/limits.js";
 import { getUserId } from "../middleware/auth.js";
 import { itemUploadLimit } from "../middleware/rateLimit.js";
+import { removeBackground, generateEmbedding } from "../services/ai/index.js";
 
 type Variables = {
   userId: string;
@@ -10,6 +11,54 @@ type Variables = {
 };
 
 const items = new Hono<{ Variables: Variables }>();
+
+/**
+ * Process an item in the background:
+ * 1. Remove background
+ * 2. Generate embedding
+ * 3. Update item in database
+ */
+async function processItemInBackground(itemId: string, imageUrl: string): Promise<void> {
+  try {
+    console.log(`[AI] Processing item ${itemId}`);
+
+    // Step 1: Remove background
+    const processedImageUrl = await removeBackground(imageUrl, itemId);
+    console.log(`[AI] Background removed for ${itemId}`);
+
+    // Step 2: Generate embedding from processed image
+    const embedding = await generateEmbedding(processedImageUrl);
+    console.log(`[AI] Embedding generated for ${itemId}`);
+
+    // Step 3: Update item with results
+    const { error } = await supabaseAdmin
+      .from("wardrobe_items")
+      .update({
+        processed_image_url: processedImageUrl,
+        embedding,
+        processing_status: "completed",
+      })
+      .eq("id", itemId);
+
+    if (error) {
+      throw new Error(`Failed to update item: ${error.message}`);
+    }
+
+    console.log(`[AI] Item ${itemId} processing completed`);
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    console.error(`[AI] Error processing item ${itemId}:`, errorMessage);
+
+    // Update item with error status
+    await supabaseAdmin
+      .from("wardrobe_items")
+      .update({
+        processing_status: "failed",
+        processing_error: errorMessage,
+      })
+      .eq("id", itemId);
+  }
+}
 
 // GET / - Fetch user's wardrobe (non-archived, ordered by created_at desc)
 items.get("/", async (c) => {
@@ -72,13 +121,13 @@ items.post("/", itemUploadLimit, async (c) => {
     return c.json({ error: "image_url is required" }, 400);
   }
 
-  // Create placeholder item (category: 'processing', embedding: zeros)
+  // Create item with processing status
   const { data, error } = await supabaseAdmin
     .from("wardrobe_items")
     .insert({
       user_id: userId,
-      image_url,
-      category: "processing",
+      original_image_url: image_url,
+      processing_status: "processing",
       times_worn: 0,
       is_archived: false,
     })
@@ -88,6 +137,11 @@ items.post("/", itemUploadLimit, async (c) => {
   if (error) {
     return c.json({ error: "Failed to create item" }, 500);
   }
+
+  // Trigger background processing (non-blocking)
+  processItemInBackground(data.id, image_url).catch((err) => {
+    console.error(`[AI] Background processing failed for ${data.id}:`, err);
+  });
 
   return c.json({ item: data }, 201);
 });
@@ -123,11 +177,11 @@ items.post("/batch", itemUploadLimit, async (c) => {
     );
   }
 
-  // Create placeholder items
+  // Create items with processing status
   const itemsData = itemsToUpload.map((item: { image_url: string }) => ({
     user_id: userId,
-    image_url: item.image_url,
-    category: "processing",
+    original_image_url: item.image_url,
+    processing_status: "processing",
     times_worn: 0,
     is_archived: false,
   }));
@@ -135,10 +189,17 @@ items.post("/batch", itemUploadLimit, async (c) => {
   const { data, error } = await supabaseAdmin
     .from("wardrobe_items")
     .insert(itemsData)
-    .select("id");
+    .select("id, original_image_url");
 
   if (error) {
     return c.json({ error: "Failed to create items" }, 500);
+  }
+
+  // Trigger background processing for each item (non-blocking)
+  for (const item of data) {
+    processItemInBackground(item.id, item.original_image_url).catch((err) => {
+      console.error(`[AI] Background processing failed for ${item.id}:`, err);
+    });
   }
 
   const results = data.map((item) => ({
