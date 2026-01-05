@@ -392,4 +392,52 @@ items.post("/:id/archive", async (c) => {
   return c.json({ item: mapItemToResponse(data) });
 });
 
+// GET /insights - Fetch wardrobe insights for home screen
+items.get("/insights", async (c) => {
+  const userId = getUserId(c);
+
+  // Get completed items with categories
+  const { data: itemsData, error: itemsError } = await supabaseAdmin
+    .from("wardrobe_items")
+    .select("id, category, item_name, processed_image_url, times_worn")
+    .eq("user_id", userId)
+    .eq("is_archived", false)
+    .eq("processing_status", "completed");
+
+  if (itemsError) {
+    return c.json({ error: "Failed to fetch wardrobe" }, 500);
+  }
+
+  const items = itemsData || [];
+  const itemCount = items.length;
+  const categories = [...new Set(items.map((i) => i.category).filter(Boolean))];
+  const categoryCount = categories.length;
+
+  // Find most worn item (using times_worn from items table)
+  let mostWornItem = null;
+  if (itemCount > 0) {
+    const topItem = items.reduce(
+      (max, item) =>
+        (item.times_worn || 0) > (max.times_worn || 0) ? item : max,
+      items[0]
+    );
+
+    if (topItem.times_worn > 0) {
+      mostWornItem = {
+        id: topItem.id,
+        name: topItem.item_name || topItem.category || "Item",
+        imageUrl: topItem.processed_image_url,
+        wearCount: topItem.times_worn,
+      };
+    }
+  }
+
+  return c.json({
+    itemCount,
+    categoryCount,
+    categories,
+    mostWornItem,
+  });
+});
+
 export default items;
