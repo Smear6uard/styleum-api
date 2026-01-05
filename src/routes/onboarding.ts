@@ -62,18 +62,21 @@ onboarding.get("/style-images", async (c) => {
   // If no department specified, show all images
 
   // Randomize order and limit to 20
-  const { data: images, error } = await query.limit(50);
+  const { data: images, error } = await query.limit(20);
 
   if (error) {
     console.error("[Onboarding] Failed to fetch style images:", error);
     return c.json({ error: "Failed to fetch style images" }, 500);
   }
 
-  // Shuffle and take 20
+  // Shuffle for randomization
   const shuffled = (images || []).sort(() => Math.random() - 0.5);
-  const selected = shuffled.slice(0, 20);
 
-  return c.json({ images: selected });
+  console.log(
+    `[Onboarding] Returning ${shuffled.length} style images for department=${department || "all"}`
+  );
+
+  return c.json({ images: shuffled });
 });
 
 /**
@@ -89,6 +92,17 @@ onboarding.get("/style-images", async (c) => {
  */
 onboarding.post("/complete", async (c) => {
   const userId = getUserId(c);
+
+  // Check if already completed (idempotency guard)
+  const { data: existingProfile } = await supabaseAdmin
+    .from("user_profiles")
+    .select("onboarding_completed")
+    .eq("id", userId)
+    .single();
+
+  if (existingProfile?.onboarding_completed) {
+    return c.json({ error: "Onboarding already completed" }, 400);
+  }
 
   const body = await c.req.json();
   const {
