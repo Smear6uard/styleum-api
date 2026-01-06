@@ -112,7 +112,7 @@ async function generateForUser(userId: string): Promise<number> {
     }
 
     // Generate outfits
-    const outfits = await generateOutfits({
+    const { outfits, weather } = await generateOutfits({
       userId,
       count: outfitsNeeded,
     });
@@ -125,7 +125,7 @@ async function generateForUser(userId: string): Promise<number> {
     // Save to database
     let savedCount = 0;
     for (const outfit of outfits) {
-      const saved = await saveGeneratedOutfit(userId, outfit);
+      const saved = await saveGeneratedOutfit(userId, outfit, undefined, weather);
       if (saved) savedCount++;
     }
 

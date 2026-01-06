@@ -154,6 +154,8 @@ export interface GeneratedOutfit {
   name: string;
   vibe: string;
   reasoning: string;
+  styling_tip?: string;
+  color_harmony_description?: string;
   confidence_score: number;
   style_score: number;
   color_harmony_score: number;
@@ -183,6 +185,11 @@ export interface GenerationConstraints {
   excludeAllPreviousItems?: boolean;
 }
 
+export interface GenerateOutfitsResult {
+  outfits: GeneratedOutfit[];
+  weather: WeatherData;
+}
+
 // Gemini response structure
 interface GeminiOutfitResponse {
   items: {
@@ -195,6 +202,8 @@ interface GeminiOutfitResponse {
   name: string;
   vibe: string;
   reasoning: string;
+  styling_tip?: string;
+  color_harmony?: string;
   confidence_score: number;
 }
 
@@ -248,6 +257,123 @@ async function getUserWardrobe(userId: string): Promise<WardrobeItem[]> {
   }
 
   return data || [];
+}
+
+// Interface for items with pgvector similarity score
+interface PgVectorCandidate extends WardrobeItem {
+  similarity: number;
+}
+
+/**
+ * Get user's gender filter based on department preferences
+ */
+async function getUserGenderFilter(userId: string): Promise<string[]> {
+  const { data: profile } = await supabaseAdmin
+    .from("user_profiles")
+    .select("departments")
+    .eq("id", userId)
+    .single();
+
+  let genderFilter: string[] = ["unisex"];
+
+  if (profile?.departments?.includes("menswear")) {
+    genderFilter.push("male");
+  }
+  if (profile?.departments?.includes("womenswear")) {
+    genderFilter.push("female");
+  }
+
+  // If no department set or both selected, include all
+  if (!profile?.departments || profile.departments.length === 0) {
+    genderFilter = ["male", "female", "unisex"];
+  }
+
+  return genderFilter;
+}
+
+/**
+ * Get outfit candidates using pgvector similarity search
+ * Uses HNSW index for fast vector search, returns top N items per category
+ * Supports season filtering and cooldown (excluding recently worn items)
+ */
+async function getCandidatesWithPgVector(
+  userId: string,
+  tasteVector: number[],
+  genders: string[],
+  limitPerSlot: number = 15,
+  seasons: string[] | null = null,
+  excludeItemIds: string[] | null = null
+): Promise<PgVectorCandidate[]> {
+  console.log(
+    `[OutfitGen] pgvector search - genders: ${genders.join(",")}, seasons: ${seasons?.join(",") || "all"}, excluding: ${excludeItemIds?.length || 0} items`
+  );
+
+  const { data, error } = await supabaseAdmin.rpc("get_outfit_candidates", {
+    p_user_id: userId,
+    p_taste_vector: tasteVector,
+    p_genders: genders,
+    p_limit_per_slot: limitPerSlot,
+    p_seasons: seasons,
+    p_exclude_item_ids: excludeItemIds,
+  });
+
+  if (error) {
+    console.error("[OutfitGen] pgvector RPC failed:", error);
+    return [];
+  }
+
+  return (data || []).map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    category: row.category as string | null,
+    subcategory: row.subcategory as string | null,
+    colors: row.colors as WardrobeItem["colors"],
+    formality_score: row.formality_score as number | null,
+    seasons: row.seasons as string[] | null,
+    occasions: row.occasions as string[] | null,
+    style_vibes: row.style_vibes as string[] | null,
+    processed_image_url: row.processed_image_url as string | null,
+    original_image_url: row.original_image_url as string | null,
+    item_name: row.item_name as string | null,
+    pattern: row.pattern as string | null,
+    gender: row.gender as WardrobeItem["gender"],
+    embedding: row.embedding as number[] | null,
+    similarity: row.similarity as number,
+  }));
+}
+
+/**
+ * Get item IDs worn in the last N days for cooldown filtering
+ */
+async function getRecentlyWornItemIds(userId: string, days: number = 3): Promise<string[]> {
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - days);
+
+  const { data, error } = await supabaseAdmin
+    .from("outfit_history")
+    .select("item_ids")
+    .eq("user_id", userId)
+    .gte("worn_at", cutoffDate.toISOString());
+
+  if (error) {
+    console.error("[OutfitGen] Failed to fetch recently worn items:", error);
+    return [];
+  }
+
+  // Flatten all item IDs from recent outfits and dedupe
+  const allItemIds = (data || []).flatMap((row) => (row.item_ids as string[]) || []);
+  return [...new Set(allItemIds)];
+}
+
+/**
+ * Map weather temperature to appropriate seasons
+ */
+function getSeasonsForWeather(weather: WeatherData): string[] {
+  const temp = weather.temperature;
+  if (temp < 5) return ["winter"];
+  if (temp < 15) return ["winter", "fall"];
+  if (temp < 22) return ["spring", "fall"];
+  if (temp < 28) return ["spring", "summer"];
+  return ["summer"];
 }
 
 function groupBySlot(items: WardrobeItem[]): Record<string, WardrobeItem[]> {
@@ -521,8 +647,10 @@ Return ONLY valid JSON, no markdown code blocks:
         "accessory": ["item_id"] or []
       },
       "name": "Creative 2-4 word outfit name",
-      "vibe": "One word vibe (e.g., Effortless, Polished, Bold, Cozy)",
+      "vibe": "One word: Effortless, Polished, Bold, Cozy, Edgy, or Classic",
       "reasoning": "1-2 sentences explaining why these pieces work together",
+      "styling_tip": "One actionable styling tip (e.g., 'Roll the sleeves for a relaxed look')",
+      "color_harmony": "One sentence about the color relationship (e.g., 'Navy and tan create a nautical palette')",
       "confidence_score": 0.85
     }
   ]
@@ -624,7 +752,7 @@ function enrichGeminiOutfits(
         avgTasteScore * 0.2 +
         weatherScore * 0.1;
 
-      return {
+      const result: GeneratedOutfit = {
         items,
         item_ids: itemIds,
         name: outfit.name || "Styled Outfit",
@@ -637,6 +765,16 @@ function enrichGeminiOutfits(
         weather_score: Math.round(weatherScore * 100) / 100,
         occasion_match: occasionMatch,
       };
+
+      // Add optional fields if present
+      if (outfit.styling_tip) {
+        result.styling_tip = outfit.styling_tip;
+      }
+      if (outfit.color_harmony) {
+        result.color_harmony_description = outfit.color_harmony;
+      }
+
+      return result;
     })
     .filter((outfit): outfit is GeneratedOutfit => outfit !== null);
 }
@@ -780,21 +918,71 @@ function generateOutfitsRuleBased(
 // MAIN GENERATION FUNCTION
 // ============================================================================
 
-export async function generateOutfits(params: GenerationParams): Promise<GeneratedOutfit[]> {
+export async function generateOutfits(params: GenerationParams): Promise<GenerateOutfitsResult> {
   const { userId, occasion, mood, lat, lon, excludeItemIds = [], count = 4, constraints } = params;
 
   console.log(`[OutfitGen] Generating ${count} outfits for user ${userId}`);
 
-  // Step 1: Fetch wardrobe
-  let wardrobe = await getUserWardrobe(userId);
-  if (wardrobe.length < 3) {
-    console.log("[OutfitGen] Not enough items in wardrobe");
-    return [];
-  }
-
-  // Step 2: Get taste vector and style preferences
+  // Step 1: Get taste vector FIRST (needed for pgvector search)
   const tasteVector = await getTasteVector(userId);
   const tastePrefs = await getUserStylePreferences(userId);
+
+  // Step 2: Get gender filter for candidate selection
+  const genderFilter = await getUserGenderFilter(userId);
+
+  // Step 3: Get weather (needed for seasonal filtering in pgvector)
+  let weather: WeatherData;
+  if (lat !== undefined && lon !== undefined) {
+    weather = (await getWeatherByCoords(lat, lon)) || getDefaultWeather();
+  } else {
+    weather = getDefaultWeather();
+  }
+  console.log(`[OutfitGen] Weather: ${weather.temperature}°C, ${weather.condition}`);
+
+  // Step 4: Calculate seasons from weather for DB-level filtering
+  const currentSeasons = getSeasonsForWeather(weather);
+  console.log(`[OutfitGen] Target seasons: ${currentSeasons.join(", ")}`);
+
+  // Step 5: Get recently worn items for cooldown (exclude from candidates)
+  const recentlyWornIds = await getRecentlyWornItemIds(userId, 3);
+  if (recentlyWornIds.length > 0) {
+    console.log(`[OutfitGen] Excluding ${recentlyWornIds.length} recently worn items (3-day cooldown)`);
+  }
+
+  // Step 6: Fetch wardrobe - use pgvector if taste vector exists
+  let wardrobe: WardrobeItem[];
+
+  if (tasteVector && tasteVector.length > 0) {
+    console.log("[OutfitGen] Using pgvector similarity search for candidates");
+    const pgCandidates = await getCandidatesWithPgVector(
+      userId,
+      tasteVector,
+      genderFilter,
+      15,
+      currentSeasons,
+      recentlyWornIds.length > 0 ? recentlyWornIds : null
+    );
+
+    if (pgCandidates.length >= 3) {
+      wardrobe = pgCandidates;
+      console.log(`[OutfitGen] pgvector returned ${wardrobe.length} candidates`);
+    } else {
+      // Fall back to regular fetch if pgvector returns too few
+      console.log("[OutfitGen] pgvector returned too few candidates, falling back to regular fetch");
+      wardrobe = await getUserWardrobe(userId);
+    }
+  } else {
+    // No taste vector, use regular wardrobe fetch
+    console.log("[OutfitGen] No taste vector, using regular wardrobe fetch");
+    wardrobe = await getUserWardrobe(userId);
+  }
+
+  if (wardrobe.length < 3) {
+    console.log("[OutfitGen] Not enough items in wardrobe");
+    return { outfits: [], weather };
+  }
+
+  // Step 7: Extract style preferences from wardrobe
   const wardrobePrefs = extractStylePreferencesFromWardrobe(wardrobe);
 
   const stylePreferences = {
@@ -802,45 +990,36 @@ export async function generateOutfits(params: GenerationParams): Promise<Generat
     preferredColors: wardrobePrefs.preferredColors,
   };
 
-  // Step 3: Get weather
-  let weather: WeatherData;
-  if (lat !== undefined && lon !== undefined) {
-    weather = (await getWeatherByCoords(lat, lon)) || getDefaultWeather();
-  } else {
-    weather = getDefaultWeather();
-  }
-  console.log(`[OutfitGen] Weather: ${weather.temperature}C, ${weather.condition}`);
-
-  // Step 4: Apply constraints
+  // Step 8: Apply constraints
   wardrobe = applyConstraints(wardrobe, constraints);
 
-  // Step 5: Filter by mood
+  // Step 9: Filter by mood
   if (mood) {
     wardrobe = filterItemsByMood(wardrobe, mood);
   }
 
-  // Step 6: Exclude specified items
+  // Step 10: Exclude specified items (in addition to cooldown)
   if (excludeItemIds.length > 0 || constraints?.excludeItemIds?.length) {
     const allExcluded = [...excludeItemIds, ...(constraints?.excludeItemIds || [])];
     wardrobe = wardrobe.filter((item) => !allExcluded.includes(item.id));
   }
 
-  // Step 7: Filter by weather and score items
+  // Step 11: Filter by weather and score items
   const scoredItems = filterByWeather(wardrobe as SeasonalWardrobeItem[], weather);
   const sortedItems = sortBySeasonalFit(scoredItems);
 
-  // Step 8: Group by slot
+  // Step 12: Group by slot
   const slotGroups = groupBySlot(sortedItems);
   const slotGroupsScored = slotGroups as Record<string, ScoredItem[]>;
 
-  // Step 9: Check if we have items in required slots
+  // Step 13: Check if we have items in required slots
   const hasRequired = OUTFIT_SLOTS.every((slot) => (slotGroups[slot]?.length ?? 0) > 0);
   if (!hasRequired) {
     console.log("[OutfitGen] Missing items in required slots");
-    return [];
+    return { outfits: [], weather };
   }
 
-  // Step 10: Try Gemini composition first
+  // Step 14: Try Gemini composition first
   let outfits: GeneratedOutfit[] = [];
 
   if (isOpenRouterAvailable()) {
@@ -861,7 +1040,7 @@ export async function generateOutfits(params: GenerationParams): Promise<Generat
     }
   }
 
-  // Step 11: Fall back to rule-based if Gemini failed or returned too few
+  // Step 15: Fall back to rule-based if Gemini failed or returned too few
   if (outfits.length < count) {
     console.log(`[OutfitGen] Falling back to rule-based generation (have ${outfits.length}, need ${count})`);
     const ruleBasedOutfits = generateOutfitsRuleBased(
@@ -875,11 +1054,11 @@ export async function generateOutfits(params: GenerationParams): Promise<Generat
     outfits = [...outfits, ...ruleBasedOutfits];
   }
 
-  // Step 12: Sort by style score
+  // Step 16: Sort by style score
   outfits.sort((a, b) => b.style_score - a.style_score);
 
   console.log(`[OutfitGen] Generated ${outfits.length} total outfits`);
-  return outfits.slice(0, count);
+  return { outfits: outfits.slice(0, count), weather };
 }
 
 // ============================================================================

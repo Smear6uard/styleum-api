@@ -14,6 +14,107 @@ import {
   type GenerationConstraints,
 } from "../services/outfitGenerator.js";
 import { updateTasteVector } from "../services/tasteVector.js";
+import type { WeatherData } from "../services/weather.js";
+
+/**
+ * Convert Celsius to Fahrenheit
+ */
+function celsiusToFahrenheit(celsius: number): number {
+  return Math.round((celsius * 9 / 5) + 32);
+}
+
+/**
+ * Format weather data for API response (iOS expects Fahrenheit)
+ */
+function formatWeatherResponse(weather: WeatherData) {
+  return {
+    temp_fahrenheit: celsiusToFahrenheit(weather.temperature),
+    condition: weather.condition,
+    humidity: weather.humidity,
+    wind_mph: Math.round(weather.wind_speed * 2.237 * 10) / 10, // m/s to mph
+    description: weather.description,
+  };
+}
+
+/**
+ * Get the role/slot for an item based on its category
+ */
+function getItemRole(category: string | null | undefined): string {
+  const cat = (category || "").toLowerCase();
+
+  // Tops
+  if (["t-shirt", "shirt", "blouse", "sweater", "hoodie", "tank-top", "polo", "top", "tee", "henley", "cardigan", "tank"].includes(cat)) {
+    return "top";
+  }
+  // Bottoms
+  if (["jeans", "pants", "trousers", "shorts", "skirt", "chinos", "joggers", "bottom", "slacks", "leggings"].includes(cat)) {
+    return "bottom";
+  }
+  // Footwear
+  if (["sneakers", "shoes", "boots", "sandals", "loafers", "heels", "footwear", "flats", "oxfords"].includes(cat)) {
+    return "footwear";
+  }
+  // Outerwear
+  if (["jacket", "coat", "blazer", "vest", "outerwear", "parka", "windbreaker"].includes(cat)) {
+    return "outerwear";
+  }
+  // Default to accessory
+  return "accessory";
+}
+
+/**
+ * Transform outfit to iOS-expected format
+ */
+interface OutfitItem {
+  id: string;
+  category?: string | null;
+  subcategory?: string | null;
+  processed_image_url?: string | null;
+  original_image_url?: string | null;
+  colors?: unknown;
+  item_name?: string | null;
+}
+
+interface GeneratedOutfitData {
+  id?: string | null;
+  item_ids: string[];
+  name: string;
+  vibe: string;
+  reasoning: string;
+  styling_tip?: string;
+  color_harmony_description?: string;
+  style_score: number;
+  confidence_score: number;
+  occasion_match?: boolean;
+}
+
+function transformOutfitForIOS(
+  outfit: GeneratedOutfitData,
+  items: OutfitItem[],
+  outfitId: string
+) {
+  return {
+    id: outfitId,
+    wardrobeItemIds: outfit.item_ids,
+    score: Math.round((outfit.style_score || 0.8) * 100),
+    headline: outfit.name,
+    vibe: outfit.vibe,
+    whyItWorks: outfit.reasoning,
+    stylingTip: outfit.styling_tip || null,
+    colorHarmony: outfit.color_harmony_description || null,
+    occasion: outfit.occasion_match ? "matched" : null,
+    vibes: [outfit.vibe].filter(Boolean),
+    items: items.map((item) => ({
+      id: item.id,
+      role: getItemRole(item.category || item.subcategory),
+      imageUrl: item.processed_image_url || item.original_image_url,
+      category: item.category,
+      subcategory: item.subcategory,
+      colors: item.colors,
+      itemName: item.item_name,
+    })),
+  };
+}
 
 type Variables = {
   userId: string;
@@ -40,8 +141,8 @@ outfits.get("/", async (c) => {
     return c.json({ error: "Failed to fetch outfits" }, 500);
   }
 
-  // Enrich with item details
-  const enrichedOutfits = await Promise.all(
+  // Transform cached outfits for iOS format
+  const transformedOutfits = await Promise.all(
     (data || []).map(async (outfit) => {
       const { data: items } = await supabaseAdmin
         .from("wardrobe_items")
@@ -50,14 +151,25 @@ outfits.get("/", async (c) => {
         )
         .in("id", outfit.items || []);
 
-      return {
-        ...outfit,
-        item_details: items || [],
+      // Map database outfit to GeneratedOutfitData format
+      const outfitData = {
+        id: outfit.id,
+        item_ids: outfit.items || [],
+        name: outfit.outfit_name || "Styled Outfit",
+        vibe: outfit.vibe || "Casual",
+        reasoning: outfit.reasoning || "",
+        styling_tip: undefined,
+        color_harmony_description: undefined,
+        style_score: outfit.style_score || 0.8,
+        confidence_score: outfit.confidence_score || 0.8,
+        occasion_match: false,
       };
+
+      return transformOutfitForIOS(outfitData, items || [], outfit.id);
     })
   );
 
-  return c.json({ outfits: enrichedOutfits });
+  return c.json({ outfits: transformedOutfits });
 });
 
 /**
@@ -74,8 +186,10 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
   const isPro = await isUserPro(userId);
   const effectiveMood = isPro ? mood : undefined;
 
+  console.log(`[Outfits] Generate request - lat: ${lat}, lon: ${lon}, occasion: ${occasion}`);
+
   // Generate outfits using AI-powered generator
-  const generatedOutfits = await generateOutfits({
+  const { outfits: generatedOutfits, weather } = await generateOutfits({
     userId,
     occasion,
     mood: effectiveMood,
@@ -83,6 +197,8 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
     lon,
     count: Math.min(count, 5), // Max 5 outfits per generation
   });
+
+  console.log(`[Outfits] Weather: ${weather.temperature}C (${celsiusToFahrenheit(weather.temperature)}F), ${weather.condition}`);
 
   if (generatedOutfits.length === 0) {
     return c.json(
@@ -97,7 +213,7 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
   // Save outfits to database
   const savedOutfits = await Promise.all(
     generatedOutfits.map(async (outfit) => {
-      const outfitId = await saveGeneratedOutfit(userId, outfit, occasion);
+      const outfitId = await saveGeneratedOutfit(userId, outfit, occasion, weather);
       return {
         id: outfitId,
         ...outfit,
@@ -105,8 +221,8 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
     })
   );
 
-  // Enrich with item details
-  const enrichedOutfits = await Promise.all(
+  // Transform outfits for iOS format
+  const transformedOutfits = await Promise.all(
     savedOutfits.map(async (outfit) => {
       const { data: items } = await supabaseAdmin
         .from("wardrobe_items")
@@ -115,19 +231,19 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
         )
         .in("id", outfit.item_ids);
 
-      return {
-        ...outfit,
-        item_details: items || [],
-      };
+      return transformOutfitForIOS(outfit, items || [], outfit.id || "");
     })
   );
 
   // Get updated credit info
   const creditInfo = await checkStyleMeLimit(userId);
 
+  console.log(`[Outfits] Generated ${transformedOutfits.length} outfits`);
+
   return c.json({
-    outfits: enrichedOutfits,
-    count: enrichedOutfits.length,
+    outfits: transformedOutfits,
+    count: transformedOutfits.length,
+    weather: formatWeatherResponse(weather),
     credits: {
       remaining: creditInfo.remaining,
       used: creditInfo.used,
@@ -367,8 +483,8 @@ outfits.get("/saved", async (c) => {
     return c.json({ error: "Failed to fetch saved outfits" }, 500);
   }
 
-  // Enrich with item details
-  const enrichedOutfits = await Promise.all(
+  // Transform saved outfits for iOS format
+  const transformedOutfits = await Promise.all(
     (data || []).map(async (outfit) => {
       const { data: items } = await supabaseAdmin
         .from("wardrobe_items")
@@ -377,14 +493,25 @@ outfits.get("/saved", async (c) => {
         )
         .in("id", outfit.items || []);
 
-      return {
-        ...outfit,
-        item_details: items || [],
+      // Map saved outfit to GeneratedOutfitData format
+      const outfitData = {
+        id: outfit.id,
+        item_ids: outfit.items || [],
+        name: outfit.outfit_name || "Saved Outfit",
+        vibe: "Saved",
+        reasoning: outfit.notes || "",
+        styling_tip: undefined,
+        color_harmony_description: undefined,
+        style_score: outfit.style_score || 0.8,
+        confidence_score: 0.9,
+        occasion_match: false,
       };
+
+      return transformOutfitForIOS(outfitData, items || [], outfit.id);
     })
   );
 
-  return c.json({ outfits: enrichedOutfits });
+  return c.json({ outfits: transformedOutfits });
 });
 
 /**
@@ -532,7 +659,7 @@ outfits.post("/regenerate", async (c) => {
   }
 
   // Generate outfits with constraints
-  const generatedOutfits = await generateOutfits({
+  const { outfits: generatedOutfits, weather } = await generateOutfits({
     userId,
     occasion,
     mood,
@@ -555,7 +682,7 @@ outfits.post("/regenerate", async (c) => {
   // Save outfits to database
   const savedOutfits = await Promise.all(
     generatedOutfits.map(async (outfit) => {
-      const outfitId = await saveGeneratedOutfit(userId, outfit, occasion);
+      const outfitId = await saveGeneratedOutfit(userId, outfit, occasion, weather);
       return {
         id: outfitId,
         ...outfit,
@@ -563,8 +690,8 @@ outfits.post("/regenerate", async (c) => {
     })
   );
 
-  // Enrich with item details
-  const enrichedOutfits = await Promise.all(
+  // Transform outfits for iOS format
+  const transformedOutfits = await Promise.all(
     savedOutfits.map(async (outfit) => {
       const { data: items } = await supabaseAdmin
         .from("wardrobe_items")
@@ -573,16 +700,14 @@ outfits.post("/regenerate", async (c) => {
         )
         .in("id", outfit.item_ids);
 
-      return {
-        ...outfit,
-        item_details: items || [],
-      };
+      return transformOutfitForIOS(outfit, items || [], outfit.id || "");
     })
   );
 
   return c.json({
-    outfits: enrichedOutfits,
-    count: enrichedOutfits.length,
+    outfits: transformedOutfits,
+    count: transformedOutfits.length,
+    weather: formatWeatherResponse(weather),
     feedback_applied: feedback,
   });
 });
