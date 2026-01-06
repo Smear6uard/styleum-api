@@ -44,18 +44,7 @@ styleQuiz.post("/submit", async (c) => {
     return c.json({ error: "Style quiz already completed" }, 409);
   }
 
-  // Minimum swipes required
   const totalSwipes = liked_style_ids.length + disliked_style_ids.length;
-  if (totalSwipes < 10) {
-    return c.json(
-      {
-        error: "Minimum 10 swipes required",
-        current: totalSwipes,
-        required: 10,
-      },
-      400
-    );
-  }
 
   try {
     // Initialize/update taste vector

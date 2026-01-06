@@ -129,18 +129,7 @@ onboarding.post("/complete", async (c) => {
     );
   }
 
-  // Minimum swipes required
   const totalSwipes = likedIds.length + dislikedIds.length;
-  if (totalSwipes < 10) {
-    return c.json(
-      {
-        error: "Minimum 10 swipes required",
-        current: totalSwipes,
-        required: 10,
-      },
-      400
-    );
-  }
 
   try {
     // Initialize taste vector from swipe data
