@@ -6,6 +6,7 @@ import { cors } from "hono/cors";
 import "dotenv/config";
 
 import { authMiddleware } from "./middleware/auth.js";
+import { trackUserActivity } from "./middleware/trackActivity.js";
 import itemsRoutes from "./routes/items.js";
 import outfitsRoutes from "./routes/outfits.js";
 import gamificationRoutes from "./routes/gamification.js";
@@ -15,6 +16,7 @@ import onboardingRoutes from "./routes/onboarding.js";
 import profileRoutes from "./routes/profile.js";
 import styleQuizRoutes from "./routes/styleQuiz.js";
 import { preGenerateOutfits } from "./jobs/preGenerate.js";
+import { sendMorningNotifications } from "./jobs/sendMorningNotifications.js";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -88,9 +90,44 @@ app.get("/cron/pre-generate", async (c) => {
   }
 });
 
+// 9AM Morning notifications cron endpoint
+app.get("/cron/morning-notifications", async (c) => {
+  const providedSecret = c.req.header("X-Cron-Secret") || c.req.query("secret");
+
+  if (!CRON_SECRET) {
+    console.error("[Cron] CRON_SECRET not configured");
+    return c.json({ error: "Cron not configured" }, 500);
+  }
+
+  if (providedSecret !== CRON_SECRET) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  console.log("[Cron] Starting morning notifications job via HTTP trigger");
+
+  try {
+    const result = await sendMorningNotifications();
+    return c.json({
+      message: "Morning notifications completed",
+      ...result,
+    });
+  } catch (error) {
+    console.error("[Cron] Morning notifications failed:", error);
+    return c.json(
+      {
+        success: false,
+        error: "Morning notifications failed",
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
+      500
+    );
+  }
+});
+
 // Protected API routes
 const api = new Hono<{ Variables: Variables }>();
 api.use("*", authMiddleware);
+api.use("*", trackUserActivity);
 api.route("/items", itemsRoutes);
 api.route("/outfits", outfitsRoutes);
 api.route("/gamification", gamificationRoutes);

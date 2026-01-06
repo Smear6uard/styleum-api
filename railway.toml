@@ -7,3 +7,13 @@ healthcheckPath = "/health"
 healthcheckTimeout = 100
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
+
+# 4AM US Eastern = 9AM UTC
+[[crons]]
+schedule = "0 9 * * *"
+endpoint = "/cron/pre-generate"
+
+# 9AM US Eastern = 2PM UTC
+[[crons]]
+schedule = "0 14 * * *"
+endpoint = "/cron/morning-notifications"
