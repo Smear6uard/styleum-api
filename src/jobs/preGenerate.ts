@@ -181,10 +181,13 @@ async function processUser(user: ActiveUser): Promise<ProcessUserResult> {
   try {
     console.log(`[PreGen] Processing user ${userId}...`);
 
-    // Step 1: Clear existing pre-generated outfits for today
+    // Step 1: Clear OLD pre-generated outfits (from previous days)
+    await clearOldPreGeneratedOutfits(userId);
+
+    // Step 2: Clear TODAY's pre-generated (in case of re-run)
     await clearTodaysPreGeneratedOutfits(userId);
 
-    // Step 2: Generate new outfits
+    // Step 3: Generate new outfits
     const { outfits, weather } = await generateOutfits({
       userId,
       lat: user.location_lat ?? undefined,
@@ -221,9 +224,28 @@ async function processUser(user: ActiveUser): Promise<ProcessUserResult> {
   }
 }
 
+async function clearOldPreGeneratedOutfits(userId: string): Promise<void> {
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  // Delete any pre-generated outfits from BEFORE today
+  const { error, count } = await supabaseAdmin
+    .from("generated_outfits")
+    .delete()
+    .eq("user_id", userId)
+    .eq("is_pre_generated", true)
+    .lt("generated_at", today.toISOString());
+
+  if (error) {
+    console.warn(`[PreGen] Failed to clear old outfits for ${userId}:`, error);
+  } else if (count && count > 0) {
+    console.log(`[PreGen] Cleared ${count} old pre-generated outfits for ${userId}`);
+  }
+}
+
 async function clearTodaysPreGeneratedOutfits(userId: string): Promise<void> {
   const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  today.setUTCHours(0, 0, 0, 0);
 
   const { error } = await supabaseAdmin
     .from("generated_outfits")
@@ -233,7 +255,7 @@ async function clearTodaysPreGeneratedOutfits(userId: string): Promise<void> {
     .gte("generated_at", today.toISOString());
 
   if (error) {
-    console.warn(`[PreGen] Failed to clear old outfits for ${userId}:`, error);
+    console.warn(`[PreGen] Failed to clear today's outfits for ${userId}:`, error);
     // Non-fatal, continue anyway
   }
 }

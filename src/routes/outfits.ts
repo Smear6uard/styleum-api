@@ -14,7 +14,7 @@ import {
   type GenerationConstraints,
 } from "../services/outfitGenerator.js";
 import { updateTasteVector } from "../services/tasteVector.js";
-import type { WeatherData } from "../services/weather.js";
+import { getWeatherByCoords, type WeatherData } from "../services/weather.js";
 
 /**
  * Convert Celsius to Fahrenheit
@@ -124,26 +124,52 @@ type Variables = {
 const outfits = new Hono<{ Variables: Variables }>();
 
 /**
- * GET / - Get cached outfits (not expired)
+ * GET / - Get TODAY's pre-generated outfits only
  */
 outfits.get("/", async (c) => {
   const userId = getUserId(c);
-  const now = new Date().toISOString();
 
-  const { data, error } = await supabaseAdmin
+  console.log(`[Outfits] GET - Fetching TODAY's outfits for user ${userId}`);
+
+  // Get today's date at midnight UTC
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  const tomorrow = new Date(today);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+  console.log(`[Outfits] Date range: ${today.toISOString()} to ${tomorrow.toISOString()}`);
+
+  // Only get pre-generated outfits from TODAY
+  const { data: preGenerated, error } = await supabaseAdmin
     .from("generated_outfits")
     .select("*")
     .eq("user_id", userId)
-    .gt("expires_at", now)
-    .order("style_score", { ascending: false, nullsFirst: false });
+    .eq("is_pre_generated", true)
+    .gte("generated_at", today.toISOString())
+    .lt("generated_at", tomorrow.toISOString())
+    .order("generated_at", { ascending: false })
+    .limit(4);
 
   if (error) {
+    console.error("[Outfits] Query error:", error);
     return c.json({ error: "Failed to fetch outfits" }, 500);
   }
 
-  // Transform cached outfits for iOS format
+  console.log(`[Outfits] Found ${preGenerated?.length || 0} pre-generated outfits for today`);
+
+  if (!preGenerated || preGenerated.length === 0) {
+    return c.json({
+      outfits: [],
+      count: 0,
+      weather: null,
+      source: "none",
+    });
+  }
+
+  // Transform for iOS
   const transformedOutfits = await Promise.all(
-    (data || []).map(async (outfit) => {
+    preGenerated.map(async (outfit) => {
       const { data: items } = await supabaseAdmin
         .from("wardrobe_items")
         .select(
@@ -169,7 +195,33 @@ outfits.get("/", async (c) => {
     })
   );
 
-  return c.json({ outfits: transformedOutfits });
+  // Get weather if user has location
+  let weather = null;
+  const { data: profile } = await supabaseAdmin
+    .from("user_profiles")
+    .select("location_lat, location_lng")
+    .eq("id", userId)
+    .single();
+
+  if (profile?.location_lat && profile?.location_lng) {
+    const weatherData = await getWeatherByCoords(profile.location_lat, profile.location_lng);
+    if (weatherData) {
+      weather = {
+        temp_fahrenheit: celsiusToFahrenheit(weatherData.temperature),
+        condition: weatherData.condition,
+        humidity: weatherData.humidity,
+        wind_mph: Math.round(weatherData.wind_speed * 2.237),
+        description: weatherData.description,
+      };
+    }
+  }
+
+  return c.json({
+    outfits: transformedOutfits,
+    count: transformedOutfits.length,
+    weather,
+    source: "pre_generated",
+  });
 });
 
 /**
