@@ -19,7 +19,11 @@ const styleQuiz = new Hono<{ Variables: Variables }>();
 styleQuiz.post("/submit", async (c) => {
   const userId = getUserId(c);
   const body = await c.req.json();
-  const { liked_style_ids, disliked_style_ids } = body;
+
+  // Accept both snake_case and camelCase
+  const liked_style_ids = body.liked_style_ids || body.likedStyleIds || [];
+  const disliked_style_ids =
+    body.disliked_style_ids || body.dislikedStyleIds || [];
 
   // Validate arrays
   if (!Array.isArray(liked_style_ids) || !Array.isArray(disliked_style_ids)) {

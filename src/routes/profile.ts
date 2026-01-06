@@ -31,7 +31,7 @@ profile.get("/", async (c) => {
     return c.json({ error: "Profile not found" }, 404);
   }
 
-  return c.json({ profile: data });
+  return c.json(data);
 });
 
 export default profile;
