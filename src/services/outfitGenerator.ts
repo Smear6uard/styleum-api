@@ -350,7 +350,7 @@ async function getRecentlyWornItemIds(userId: string, days: number = 3): Promise
 
   const { data, error } = await supabaseAdmin
     .from("outfit_history")
-    .select("item_ids")
+    .select("items")
     .eq("user_id", userId)
     .gte("worn_at", cutoffDate.toISOString());
 
@@ -360,7 +360,7 @@ async function getRecentlyWornItemIds(userId: string, days: number = 3): Promise
   }
 
   // Flatten all item IDs from recent outfits and dedupe
-  const allItemIds = (data || []).flatMap((row) => (row.item_ids as string[]) || []);
+  const allItemIds = (data || []).flatMap((row) => (row.items as string[]) || []);
   return [...new Set(allItemIds)];
 }
 
