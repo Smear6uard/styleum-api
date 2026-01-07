@@ -15,6 +15,7 @@ import webhooksRoutes from "./routes/webhooks.js";
 import onboardingRoutes from "./routes/onboarding.js";
 import profileRoutes from "./routes/profile.js";
 import styleQuizRoutes from "./routes/styleQuiz.js";
+import accountRoutes from "./routes/account.js";
 import { preGenerateOutfits } from "./jobs/preGenerate.js";
 import { sendMorningNotifications } from "./jobs/sendMorningNotifications.js";
 
@@ -135,6 +136,7 @@ api.route("/subscriptions", subscriptionsRoutes);
 api.route("/onboarding", onboardingRoutes);
 api.route("/profile", profileRoutes);
 api.route("/style-quiz", styleQuizRoutes);
+api.route("/account", accountRoutes);
 
 app.route("/api", api);
 
