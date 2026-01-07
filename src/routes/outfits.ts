@@ -39,27 +39,56 @@ function formatWeatherResponse(weather: WeatherData) {
 /**
  * Get the role/slot for an item based on its category
  */
-function getItemRole(category: string | null | undefined): string {
-  const cat = (category || "").toLowerCase();
+function getItemRole(category: string | null | undefined, subcategory: string | null | undefined): string {
+  const cat = (category || '').toLowerCase();
+  const sub = (subcategory || '').toLowerCase();
 
   // Tops
-  if (["t-shirt", "shirt", "blouse", "sweater", "hoodie", "tank-top", "polo", "top", "tee", "henley", "cardigan", "tank"].includes(cat)) {
-    return "top";
+  if (cat.includes('top') || cat.includes('shirt') || cat.includes('tee') ||
+      cat.includes('blouse') || cat.includes('sweater') || cat.includes('hoodie') ||
+      cat.includes('polo') || cat.includes('tank') || cat.includes('henley') ||
+      sub.includes('top') || sub.includes('shirt')) {
+    return 'Top';
   }
+
   // Bottoms
-  if (["jeans", "pants", "trousers", "shorts", "skirt", "chinos", "joggers", "bottom", "slacks", "leggings"].includes(cat)) {
-    return "bottom";
+  if (cat.includes('bottom') || cat.includes('pant') || cat.includes('jean') ||
+      cat.includes('short') || cat.includes('skirt') || cat.includes('trouser') ||
+      cat.includes('chino') || cat.includes('jogger') || cat.includes('legging') ||
+      sub.includes('bottom') || sub.includes('pant')) {
+    return 'Bottom';
   }
+
   // Footwear
-  if (["sneakers", "shoes", "boots", "sandals", "loafers", "heels", "footwear", "flats", "oxfords"].includes(cat)) {
-    return "footwear";
+  if (cat.includes('shoe') || cat.includes('footwear') || cat.includes('sneaker') ||
+      cat.includes('boot') || cat.includes('sandal') || cat.includes('loafer') ||
+      cat.includes('heel') || cat.includes('flat') || cat.includes('oxford') ||
+      sub.includes('shoe') || sub.includes('footwear')) {
+    return 'Footwear';
   }
+
   // Outerwear
-  if (["jacket", "coat", "blazer", "vest", "outerwear", "parka", "windbreaker"].includes(cat)) {
-    return "outerwear";
+  if (cat.includes('outerwear') || cat.includes('jacket') || cat.includes('coat') ||
+      cat.includes('blazer') || cat.includes('cardigan') || cat.includes('vest') ||
+      sub.includes('outerwear') || sub.includes('jacket')) {
+    return 'Outerwear';
   }
-  // Default to accessory
-  return "accessory";
+
+  // Accessories (only actual accessories)
+  if (cat.includes('accessor') || cat.includes('belt') || cat.includes('hat') ||
+      cat.includes('watch') || cat.includes('jewelry') || cat.includes('bag') ||
+      cat.includes('scarf') || cat.includes('sunglasses') || cat.includes('tie') ||
+      cat.includes('glove') || cat.includes('sock')) {
+    return 'Accessory';
+  }
+
+  // Default based on common patterns
+  // If we can't determine, return the category capitalized or "Item"
+  if (cat) {
+    return cat.charAt(0).toUpperCase() + cat.slice(1);
+  }
+
+  return 'Item';
 }
 
 /**
@@ -104,15 +133,19 @@ function transformOutfitForIOS(
     colorHarmony: outfit.color_harmony_description || null,
     occasion: outfit.occasion_match ? "matched" : null,
     vibes: [outfit.vibe].filter(Boolean),
-    items: items.map((item) => ({
-      id: item.id,
-      role: getItemRole(item.category || item.subcategory),
-      imageUrl: item.processed_image_url || item.original_image_url,
-      category: item.category,
-      subcategory: item.subcategory,
-      colors: item.colors,
-      itemName: item.item_name,
-    })),
+    items: items.map((item) => {
+      const role = getItemRole(item.category, item.subcategory);
+      console.log(`[Transform] Item: ${item.item_name || 'unnamed'}, category: ${item.category}, subcategory: ${item.subcategory}, role: ${role}`);
+      return {
+        id: item.id,
+        role,
+        imageUrl: item.processed_image_url || item.original_image_url,
+        category: item.category,
+        subcategory: item.subcategory,
+        colors: item.colors,
+        itemName: item.item_name,
+      };
+    }),
   };
 }
 
