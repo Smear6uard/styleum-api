@@ -27,14 +27,41 @@ gamification.get("/stats", async (c) => {
     return c.json({ error: "Failed to fetch gamification stats" }, 500);
   }
 
+  // Check if user has engaged today (daily_xp > 0)
+  const hasEngagedToday = stats.daily_xp_earned > 0;
+
+  // Check if streak was frozen today by querying daily_activity
+  const today = new Date().toISOString().split("T")[0];
+  const { data: todayActivity } = await (await import("../services/supabase.js")).supabaseAdmin
+    .from("daily_activity")
+    .select("freeze_used")
+    .eq("user_id", userId)
+    .eq("activity_date", today)
+    .single();
+
+  const streakFrozenToday = todayActivity?.freeze_used ?? false;
+
+  // Calculate hours until streak loss (midnight + some grace period, typically 4am local)
+  // Assuming UTC, streak resets at 4am UTC next day
+  const now = new Date();
+  const resetTime = new Date(now);
+  resetTime.setUTCDate(resetTime.getUTCDate() + 1);
+  resetTime.setUTCHours(4, 0, 0, 0);
+  const hoursUntilStreakLoss = Math.max(0, Math.round((resetTime.getTime() - now.getTime()) / (1000 * 60 * 60)));
+
   // Return flat structure that iOS expects
   return c.json({
     current_streak: stats.current_streak,
     longest_streak: stats.longest_streak,
-    total_days_active: stats.daily_goals_streak, // Days where daily goal was met
+    total_days_active: stats.daily_goals_streak,
     streak_freezes: stats.streak_freezes,
     xp: stats.total_xp,
     level: stats.level,
+    daily_xp_earned: stats.daily_xp_earned,
+    daily_goal_xp: stats.daily_xp_goal,
+    has_engaged_today: hasEngagedToday,
+    streak_frozen_today: streakFrozenToday,
+    hours_until_streak_loss: hoursUntilStreakLoss,
   });
 });
 
@@ -48,7 +75,7 @@ gamification.get("/levels", async (c) => {
 
 /**
  * GET /achievements - Get all achievements with progress
- * Grouped by category for easy display
+ * Returns wrapped object for iOS compatibility
  */
 gamification.get("/achievements", async (c) => {
   const userId = getUserId(c);
@@ -56,30 +83,20 @@ gamification.get("/achievements", async (c) => {
   try {
     const achievements = await GamificationService.getAchievements(userId);
 
-    // Group by category
-    const grouped = achievements.reduce(
-      (acc, achievement) => {
-        const category = achievement.category || "other";
-        if (!acc[category]) {
-          acc[category] = [];
-        }
-        acc[category].push(achievement);
-        return acc;
-      },
-      {} as Record<string, typeof achievements>
-    );
+    // Transform to iOS expected format with target instead of requirement_value
+    const transformedAchievements = achievements.map((a) => ({
+      id: a.id,
+      name: a.name,
+      description: a.description,
+      category: a.category,
+      xp_reward: a.xp_reward,
+      is_unlocked: a.is_unlocked,
+      progress: a.progress ?? 0,
+      target: a.requirement_value, // iOS expects "target" not "requirement_value"
+    }));
 
-    // Calculate stats
-    const totalCount = achievements.length;
-    const unlockedCount = achievements.filter((a) => a.is_unlocked).length;
-    const unseenCount = achievements.filter((a) => a.is_unlocked && !a.is_seen).length;
-
-    return c.json({
-      achievements: grouped,
-      total: totalCount,
-      unlocked: unlockedCount,
-      unseen: unseenCount,
-    });
+    // Return wrapped object as iOS expects
+    return c.json({ achievements: transformedAchievements });
   } catch (error) {
     console.error("[Gamification] Error in /achievements route:", error);
     return c.json({ error: "Failed to fetch achievements", details: error instanceof Error ? error.message : "Unknown error" }, 500);
@@ -88,6 +105,7 @@ gamification.get("/achievements", async (c) => {
 
 /**
  * POST /achievements/:id/seen - Mark an achievement as seen
+ * Returns 204 No Content for iOS compatibility
  */
 gamification.post("/achievements/:id/seen", async (c) => {
   const userId = getUserId(c);
@@ -102,42 +120,84 @@ gamification.post("/achievements/:id/seen", async (c) => {
     return c.json({ error: "Failed to mark achievement as seen" }, 500);
   }
 
-  return c.json({ success: true });
+  // Return 204 No Content as iOS expects
+  return c.body(null, 204);
 });
 
 /**
  * GET /challenges/daily - Get today's daily challenges
- * Returns 3 challenges with progress
+ * Returns 3 challenges with progress (iOS compatible format)
  */
 gamification.get("/challenges/daily", async (c) => {
   const userId = getUserId(c);
 
   const challenges = await GamificationService.getDailyChallenges(userId);
 
-  // Calculate stats
+  // Calculate today's date and reset time (4am UTC tomorrow)
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const todayISO = today.toISOString();
+
+  const resetTime = new Date(today);
+  resetTime.setUTCDate(resetTime.getUTCDate() + 1);
+  resetTime.setUTCHours(4, 0, 0, 0);
+  const resetsAtISO = resetTime.toISOString();
+
+  // Transform challenges to iOS expected format
+  const transformedChallenges = challenges.map((ch) => ({
+    id: ch.id,
+    name: ch.name, // iOS expects "name"
+    description: ch.description,
+    progress: ch.progress,
+    target: ch.target,
+    xp_reward: ch.xp_reward,
+    is_completed: ch.is_completed,
+    is_claimed: ch.is_claimed,
+  }));
+
   const completedCount = challenges.filter((ch) => ch.is_completed).length;
-  const claimedCount = challenges.filter((ch) => ch.is_claimed).length;
   const totalXP = challenges.reduce((sum, ch) => sum + ch.xp_reward, 0);
-  const claimedXP = challenges
-    .filter((ch) => ch.is_claimed)
-    .reduce((sum, ch) => sum + ch.xp_reward, 0);
 
   return c.json({
-    challenges,
-    completed: completedCount,
-    claimed: claimedCount,
+    challenges: transformedChallenges,
     total_xp_available: totalXP,
-    xp_claimed: claimedXP,
+    completed_count: completedCount,
+    date: todayISO,
+    resets_at: resetsAtISO,
   });
 });
 
 /**
- * GET /challenges/weekly - Get this week's challenge
+ * GET /challenges/weekly - Get this week's challenge (iOS compatible format)
  */
 gamification.get("/challenges/weekly", async (c) => {
   const userId = getUserId(c);
 
-  const challenge = await GamificationService.getWeeklyChallenge(userId);
+  const rawChallenge = await GamificationService.getWeeklyChallenge(userId);
+
+  if (!rawChallenge) {
+    return c.json({ challenge: null });
+  }
+
+  // Calculate week end (Sunday 4am UTC)
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+  const weekEnd = new Date(now);
+  weekEnd.setDate(now.getDate() + daysUntilSunday + 1);
+  weekEnd.setUTCHours(4, 0, 0, 0);
+
+  // Transform to iOS expected format
+  const challenge = {
+    id: rawChallenge.id,
+    title: rawChallenge.name,
+    description: rawChallenge.description,
+    target: rawChallenge.target,
+    progress: rawChallenge.progress,
+    xp_reward: rawChallenge.xp_reward,
+    ends_at: weekEnd.toISOString(),
+    completed_at: rawChallenge.completed_at,
+  };
 
   return c.json({ challenge });
 });
@@ -145,6 +205,7 @@ gamification.get("/challenges/weekly", async (c) => {
 /**
  * POST /challenges/:id/claim - Claim a completed challenge
  * Query param: weekly=true for weekly challenges
+ * Returns updated challenge object for iOS compatibility
  */
 gamification.post("/challenges/:id/claim", async (c) => {
   const userId = getUserId(c);
@@ -161,13 +222,37 @@ gamification.post("/challenges/:id/claim", async (c) => {
     return c.json({ error: result.error }, 400);
   }
 
+  // Fetch the updated challenge to include in response
+  let challenge = null;
+  if (!isWeekly) {
+    const challenges = await GamificationService.getDailyChallenges(userId);
+    const foundChallenge = challenges.find((ch) => ch.id === challengeId);
+    if (foundChallenge) {
+      // Transform to iOS format
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0);
+      challenge = {
+        id: foundChallenge.id,
+        type: foundChallenge.challenge_type,
+        title: foundChallenge.name,
+        description: foundChallenge.description,
+        target: foundChallenge.target,
+        progress: foundChallenge.progress,
+        xp_reward: foundChallenge.xp_reward,
+        icon_name: foundChallenge.icon,
+        completed_at: foundChallenge.completed_at,
+        date: today.toISOString(),
+      };
+    }
+  }
+
   return c.json({
     success: true,
-    xp_awarded: isWeekly ? 150 : result.daily_xp, // Approximate based on type
+    challenge,
+    xp_awarded: isWeekly ? 150 : result.daily_xp,
     new_total_xp: result.new_total_xp,
     level_up: result.level_up,
     new_level: result.new_level,
-    daily_goal_met: result.daily_goal_met,
   });
 });
 
@@ -178,7 +263,8 @@ gamification.post("/challenges/:id/claim", async (c) => {
 gamification.get("/streak", async (c) => {
   const userId = getUserId(c);
 
-  const streakResult = await GamificationService.checkStreak(userId);
+  // Check streak to trigger any needed updates
+  await GamificationService.checkStreak(userId);
   const stats = await GamificationService.getStats(userId);
 
   if (!stats) {
@@ -188,11 +274,12 @@ gamification.get("/streak", async (c) => {
   // Check restore eligibility
   let canRestore = false;
   let restoreExpiresAt = null;
+  let lastActiveDate: string | null = null;
 
-  // Query for streak_lost_at
+  // Query for streak_lost_at and last_streak_activity_date
   const { data: gamData } = await (await import("../services/supabase.js")).supabaseAdmin
     .from("user_gamification")
-    .select("streak_lost_at")
+    .select("streak_lost_at, last_streak_activity_date")
     .eq("user_id", userId)
     .single();
 
@@ -205,10 +292,19 @@ gamification.get("/streak", async (c) => {
     }
   }
 
+  lastActiveDate = gamData?.last_streak_activity_date || null;
+
+  // Calculate if streak is at risk (not maintained today)
+  const today = new Date().toISOString().split("T")[0];
+  const streakAtRisk = stats.current_streak > 0 && lastActiveDate !== today;
+
+  // Return iOS expected format
   return c.json({
-    current_streak: streakResult.current_streak,
-    longest_streak: streakResult.longest_streak,
-    streak_freezes: streakResult.freezes_remaining,
+    current_streak: stats.current_streak,
+    longest_streak: stats.longest_streak,
+    streak_freezes: stats.streak_freezes,
+    last_active_date: lastActiveDate,
+    streak_at_risk: streakAtRisk,
     max_freezes: stats.max_streak_freezes,
     can_restore: canRestore,
     restore_expires_at: restoreExpiresAt,
@@ -234,6 +330,111 @@ gamification.post("/streak/restore", async (c) => {
     restored_streak: result.new_streak,
     xp_spent: result.xp_cost,
     new_total_xp: result.new_total_xp,
+  });
+});
+
+/**
+ * POST /streak-freeze - Use a streak freeze to protect today's streak
+ * Returns updated stats (iOS compatible)
+ */
+gamification.post("/streak-freeze", async (c) => {
+  const userId = getUserId(c);
+
+  const stats = await GamificationService.getStats(userId);
+
+  if (!stats) {
+    return c.json({ error: "Failed to fetch gamification stats" }, 500);
+  }
+
+  // Check if user has streak freezes available
+  if (stats.streak_freezes <= 0) {
+    return c.json({ error: "No streak freezes available" }, 400);
+  }
+
+  // Streak freezes are used automatically when needed, so just return current stats
+  // This endpoint confirms the freeze is available for protection
+  const hasEngagedToday = stats.daily_xp_earned > 0;
+
+  const today = new Date().toISOString().split("T")[0];
+  const { data: todayActivity } = await (await import("../services/supabase.js")).supabaseAdmin
+    .from("daily_activity")
+    .select("freeze_used")
+    .eq("user_id", userId)
+    .eq("activity_date", today)
+    .single();
+
+  const streakFrozenToday = todayActivity?.freeze_used ?? false;
+
+  const now = new Date();
+  const resetTime = new Date(now);
+  resetTime.setUTCDate(resetTime.getUTCDate() + 1);
+  resetTime.setUTCHours(4, 0, 0, 0);
+  const hoursUntilStreakLoss = Math.max(0, Math.round((resetTime.getTime() - now.getTime()) / (1000 * 60 * 60)));
+
+  return c.json({
+    current_streak: stats.current_streak,
+    longest_streak: stats.longest_streak,
+    total_days_active: stats.daily_goals_streak,
+    streak_freezes: stats.streak_freezes,
+    xp: stats.total_xp,
+    level: stats.level,
+    daily_xp_earned: stats.daily_xp_earned,
+    daily_goal_xp: stats.daily_xp_goal,
+    has_engaged_today: hasEngagedToday,
+    streak_frozen_today: streakFrozenToday,
+    hours_until_streak_loss: hoursUntilStreakLoss,
+  });
+});
+
+/**
+ * POST /restore-streak - Alias for /streak/restore (iOS compatible path)
+ */
+gamification.post("/restore-streak", async (c) => {
+  const userId = getUserId(c);
+
+  const result = await GamificationService.restoreStreak(userId);
+
+  if (!result.success) {
+    return c.json({ error: result.error }, 400);
+  }
+
+  // Return stats format as iOS expects
+  const stats = await GamificationService.getStats(userId);
+
+  if (!stats) {
+    return c.json({ error: "Failed to fetch gamification stats" }, 500);
+  }
+
+  const hasEngagedToday = stats.daily_xp_earned > 0;
+
+  const today = new Date().toISOString().split("T")[0];
+  const { data: todayActivity } = await (await import("../services/supabase.js")).supabaseAdmin
+    .from("daily_activity")
+    .select("freeze_used")
+    .eq("user_id", userId)
+    .eq("activity_date", today)
+    .single();
+
+  const streakFrozenToday = todayActivity?.freeze_used ?? false;
+
+  const now = new Date();
+  const resetTime = new Date(now);
+  resetTime.setUTCDate(resetTime.getUTCDate() + 1);
+  resetTime.setUTCHours(4, 0, 0, 0);
+  const hoursUntilStreakLoss = Math.max(0, Math.round((resetTime.getTime() - now.getTime()) / (1000 * 60 * 60)));
+
+  return c.json({
+    current_streak: stats.current_streak,
+    longest_streak: stats.longest_streak,
+    total_days_active: stats.daily_goals_streak,
+    streak_freezes: stats.streak_freezes,
+    xp: stats.total_xp,
+    level: stats.level,
+    daily_xp_earned: stats.daily_xp_earned,
+    daily_goal_xp: stats.daily_xp_goal,
+    has_engaged_today: hasEngagedToday,
+    streak_frozen_today: streakFrozenToday,
+    hours_until_streak_loss: hoursUntilStreakLoss,
   });
 });
 
@@ -322,76 +523,109 @@ gamification.get("/leaderboard", async (c) => {
 // ============================================================================
 
 /**
- * GET /daily-challenges - Alias for /challenges/daily
+ * GET /daily-challenges - Alias for /challenges/daily (iOS compatible format)
  */
 gamification.get("/daily-challenges", async (c) => {
   const userId = getUserId(c);
 
   const challenges = await GamificationService.getDailyChallenges(userId);
 
+  // Calculate today's date and reset time (4am UTC tomorrow)
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const todayISO = today.toISOString();
+
+  const resetTime = new Date(today);
+  resetTime.setUTCDate(resetTime.getUTCDate() + 1);
+  resetTime.setUTCHours(4, 0, 0, 0);
+  const resetsAtISO = resetTime.toISOString();
+
+  // Transform challenges to iOS expected format
+  const transformedChallenges = challenges.map((ch) => ({
+    id: ch.id,
+    name: ch.name, // iOS expects "name"
+    description: ch.description,
+    progress: ch.progress,
+    target: ch.target,
+    xp_reward: ch.xp_reward,
+    is_completed: ch.is_completed,
+    is_claimed: ch.is_claimed,
+  }));
+
   const completedCount = challenges.filter((ch) => ch.is_completed).length;
-  const claimedCount = challenges.filter((ch) => ch.is_claimed).length;
   const totalXP = challenges.reduce((sum, ch) => sum + ch.xp_reward, 0);
-  const claimedXP = challenges
-    .filter((ch) => ch.is_claimed)
-    .reduce((sum, ch) => sum + ch.xp_reward, 0);
 
   return c.json({
-    challenges,
-    completed: completedCount,
-    claimed: claimedCount,
+    challenges: transformedChallenges,
     total_xp_available: totalXP,
-    xp_claimed: claimedXP,
+    completed_count: completedCount,
+    date: todayISO,
+    resets_at: resetsAtISO,
   });
 });
 
 /**
- * GET /weekly-challenge - Alias for /challenges/weekly
+ * GET /weekly-challenge - Alias for /challenges/weekly (iOS compatible format)
  */
 gamification.get("/weekly-challenge", async (c) => {
   const userId = getUserId(c);
 
-  const challenge = await GamificationService.getWeeklyChallenge(userId);
+  const rawChallenge = await GamificationService.getWeeklyChallenge(userId);
+
+  if (!rawChallenge) {
+    return c.json({ challenge: null });
+  }
+
+  // Calculate week end (Sunday 4am UTC)
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+  const weekEnd = new Date(now);
+  weekEnd.setDate(now.getDate() + daysUntilSunday + 1); // Monday 4am
+  weekEnd.setUTCHours(4, 0, 0, 0);
+
+  // Transform to iOS expected format
+  const challenge = {
+    id: rawChallenge.id,
+    title: rawChallenge.name, // Renamed from name
+    description: rawChallenge.description,
+    target: rawChallenge.target,
+    progress: rawChallenge.progress,
+    xp_reward: rawChallenge.xp_reward,
+    ends_at: weekEnd.toISOString(),
+    completed_at: rawChallenge.completed_at,
+  };
 
   return c.json({ challenge });
 });
 
 /**
- * GET /activity-history - Alias for /activity/calendar
- * Query params: year (YYYY), month (1-12)
+ * GET /activity-history - Get activity for last N days
+ * Query param: days (default 7)
+ * iOS compatible format
  */
 gamification.get("/activity-history", async (c) => {
   const userId = getUserId(c);
 
-  const now = new Date();
-  const year = parseInt(c.req.query("year") ?? String(now.getFullYear()));
-  const month = parseInt(c.req.query("month") ?? String(now.getMonth() + 1));
+  const days = parseInt(c.req.query("days") ?? "7");
 
-  if (isNaN(year) || isNaN(month) || month < 1 || month > 12) {
-    return c.json({ error: "Invalid year or month" }, 400);
+  if (isNaN(days) || days < 1 || days > 365) {
+    return c.json({ error: "Invalid days parameter (1-365)" }, 400);
   }
 
-  const calendar = await GamificationService.getActivityCalendar(
-    userId,
-    year,
-    month
-  );
+  const activityDays = await GamificationService.getActivityByDays(userId, days);
 
-  const totalXP = calendar.reduce((sum, day) => sum + day.xp_earned, 0);
-  const activeDays = calendar.length;
-  const streakDays = calendar.filter((day) => day.streak_maintained).length;
-  const goalDays = calendar.filter((day) => day.daily_goal_met).length;
+  // Transform to iOS expected format
+  const activities = activityDays.map((day) => ({
+    date: new Date(day.activity_date).toISOString(),
+    has_activity: true,
+    xp_earned: day.xp_earned,
+    outfits_worn: day.outfits_worn,
+    items_added: day.items_added,
+  }));
 
   return c.json({
-    year,
-    month,
-    days: calendar,
-    stats: {
-      total_xp: totalXP,
-      active_days: activeDays,
-      streak_days: streakDays,
-      goal_days: goalDays,
-    },
+    activities,
   });
 });
 

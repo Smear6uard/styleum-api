@@ -497,18 +497,22 @@ export class GamificationService {
     gamification: Record<string, unknown>,
     userId: string
   ): Promise<GamificationStats> {
+    // Use correct column names from database
+    const currentLevel = (gamification.current_level as number) || 1;
+    const streakFreezes = (gamification.streak_freezes_available as number) || 0;
+
     // Get level info
     const { data: levelInfo } = await supabaseAdmin
       .from("levels")
       .select("*")
-      .eq("level", gamification.level)
+      .eq("level", currentLevel)
       .single();
 
     // Get next level info for progress calculation
     const { data: nextLevelInfo } = await supabaseAdmin
       .from("levels")
       .select("*")
-      .eq("level", (gamification.level as number) + 1)
+      .eq("level", currentLevel + 1)
       .single();
 
     const isPro = await isUserPro(userId);
@@ -530,18 +534,18 @@ export class GamificationService {
     }
 
     return {
-      total_xp: gamification.total_xp as number,
-      level: gamification.level as number,
+      total_xp: (gamification.total_xp as number) || 0,
+      level: currentLevel,
       level_title: levelInfo?.title || "Style Newbie",
       level_progress: levelProgress,
       xp_to_next_level: Math.max(0, xpToNextLevel),
-      current_streak: gamification.current_streak as number,
-      longest_streak: gamification.longest_streak as number,
-      streak_freezes: gamification.streak_freezes as number,
+      current_streak: (gamification.current_streak as number) || 0,
+      longest_streak: (gamification.longest_streak as number) || 0,
+      streak_freezes: streakFreezes,
       max_streak_freezes: maxFreezes,
-      daily_xp_earned: gamification.daily_xp_earned as number,
+      daily_xp_earned: (gamification.daily_xp_earned as number) || 0,
       daily_xp_goal: dailyGoal,
-      daily_goal_met: (gamification.daily_xp_earned as number) >= dailyGoal,
+      daily_goal_met: ((gamification.daily_xp_earned as number) || 0) >= dailyGoal,
       daily_goals_streak: (gamification.daily_goals_streak as number) || 0,
       total_outfits_worn: (gamification.total_outfits_worn as number) || 0,
       total_items_added: (gamification.total_items_added as number) || 0,
@@ -696,7 +700,6 @@ export class GamificationService {
             name,
             description,
             challenge_type,
-            difficulty,
             icon
           )
         `
@@ -726,7 +729,7 @@ export class GamificationService {
         progress: challenge.progress,
         target: challenge.target,
         xp_reward: challenge.xp_reward,
-        difficulty: wc?.difficulty || "",
+        difficulty: "weekly", // Weekly challenges don't have difficulty, set default
         icon: wc?.icon || "",
         is_completed: challenge.is_completed,
         is_claimed: challenge.is_claimed,
@@ -1092,6 +1095,41 @@ export class GamificationService {
       return data || [];
     } catch (err) {
       console.error("[Gamification] Exception getting activity calendar:", err);
+      return [];
+    }
+  }
+
+  /**
+   * Get activity for the last N days (for iOS compatibility)
+   */
+  static async getActivityByDays(
+    userId: string,
+    days: number
+  ): Promise<ActivityDay[]> {
+    try {
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days + 1);
+
+      const startDateStr = startDate.toISOString().split("T")[0];
+      const endDateStr = endDate.toISOString().split("T")[0];
+
+      const { data, error } = await supabaseAdmin
+        .from("daily_activity")
+        .select("*")
+        .eq("user_id", userId)
+        .gte("activity_date", startDateStr)
+        .lte("activity_date", endDateStr)
+        .order("activity_date", { ascending: false });
+
+      if (error) {
+        console.error("[Gamification] Error fetching activity by days:", error);
+        return [];
+      }
+
+      return data || [];
+    } catch (err) {
+      console.error("[Gamification] Exception getting activity by days:", err);
       return [];
     }
   }
