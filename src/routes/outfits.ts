@@ -15,6 +15,10 @@ import {
 } from "../services/outfitGenerator.js";
 import { updateTasteVector } from "../services/tasteVector.js";
 import { getWeatherByCoords, type WeatherData } from "../services/weather.js";
+import {
+  GamificationService,
+  XP_AMOUNTS,
+} from "../services/gamification.js";
 
 /**
  * Convert Celsius to Fahrenheit
@@ -325,6 +329,42 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
 
   console.log(`[Outfits] Generated ${transformedOutfits.length} outfits`);
 
+  // Award XP for viewing/generating outfits (fire-and-forget)
+  void (async () => {
+    try {
+      // Award 1 XP per outfit generated
+      const viewXP = generatedOutfits.length * XP_AMOUNTS.VIEW_OUTFIT;
+      await GamificationService.awardXP(
+        userId,
+        viewXP,
+        "view_outfit",
+        undefined,
+        `Generated ${generatedOutfits.length} outfits`
+      );
+
+      // Update challenge progress
+      await GamificationService.updateChallengeProgress(
+        userId,
+        "view_outfits",
+        generatedOutfits.length
+      );
+      await GamificationService.updateChallengeProgress(
+        userId,
+        "generate_outfits",
+        generatedOutfits.length
+      );
+
+      // Increment stats
+      await GamificationService.incrementStat(
+        userId,
+        "total_outfits_generated",
+        generatedOutfits.length
+      );
+    } catch (err) {
+      console.error("[Gamification] Error in generate:", err);
+    }
+  })();
+
   return c.json({
     outfits: transformedOutfits,
     count: transformedOutfits.length,
@@ -340,6 +380,7 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
 
 /**
  * POST /:id/wear - Mark outfit as worn
+ * CRITICAL: This is the ONLY action that maintains the streak!
  */
 outfits.post("/:id/wear", async (c) => {
   const userId = getUserId(c);
@@ -360,8 +401,8 @@ outfits.post("/:id/wear", async (c) => {
     return c.json({ error: "Outfit not found" }, 404);
   }
 
-  // Base XP for wearing an outfit is 25
-  const xpAwarded = 25;
+  // Award 10 XP for wearing an outfit (changed from 25)
+  const xpAwarded = XP_AMOUNTS.WEAR_OUTFIT;
 
   // Add to outfit history
   const { error: historyError } = await supabaseAdmin
@@ -392,11 +433,38 @@ outfits.post("/:id/wear", async (c) => {
     }
   }
 
-  // Update user gamification XP
-  await supabaseAdmin.rpc("add_user_xp", {
-    p_user_id: userId,
-    p_xp: xpAwarded,
-  });
+  // Award XP using new gamification system
+  const xpResult = await GamificationService.awardXP(
+    userId,
+    xpAwarded,
+    "wear_outfit",
+    outfitId,
+    "Wore outfit"
+  );
+
+  // CRITICAL: Maintain streak - wearing is the only action that maintains streak!
+  const streakResult = await GamificationService.maintainStreak(userId);
+
+  // Update challenge progress
+  await GamificationService.updateChallengeProgress(userId, "wear_outfit", 1);
+
+  // Update style_score challenge if outfit has score
+  if (outfit.style_score) {
+    const scorePercent = Math.round(outfit.style_score * 100);
+    await GamificationService.updateChallengeProgress(
+      userId,
+      "style_score",
+      0,
+      scorePercent
+    );
+  }
+
+  // Increment stats
+  await GamificationService.incrementStat(userId, "total_outfits_worn", 1);
+
+  // Check for new achievements
+  const newAchievements =
+    await GamificationService.checkAndUnlockAchievements(userId);
 
   // Record interaction for taste vector learning
   await recordOutfitInteraction(userId, outfitId, "wear");
@@ -410,6 +478,18 @@ outfits.post("/:id/wear", async (c) => {
   return c.json({
     success: true,
     xp_awarded: xpAwarded,
+    gamification: {
+      level_up: xpResult.level_up,
+      new_level: xpResult.new_level,
+      daily_goal_met: xpResult.daily_goal_met,
+      streak: {
+        current: streakResult.current_streak,
+        maintained: streakResult.streak_maintained,
+        freeze_used: streakResult.freeze_used,
+        freeze_earned: streakResult.streak_freeze_earned,
+      },
+      new_achievements: newAchievements,
+    },
     message: "Outfit marked as worn! Use /verify to add photo proof for bonus XP.",
   });
 });
@@ -465,9 +545,26 @@ outfits.post("/:id/save", async (c) => {
   // Record interaction for taste vector learning
   await recordOutfitInteraction(userId, outfitId, "save");
 
+  // Award XP for saving outfit (fire-and-forget)
+  void (async () => {
+    try {
+      await GamificationService.awardXP(
+        userId,
+        XP_AMOUNTS.SAVE_OUTFIT,
+        "save_outfit",
+        outfitId,
+        "Saved outfit"
+      );
+      await GamificationService.updateChallengeProgress(userId, "save_outfit", 1);
+    } catch (err) {
+      console.error("[Gamification] Error in save:", err);
+    }
+  })();
+
   return c.json({
     success: true,
     saved_outfit: saved,
+    xp_awarded: XP_AMOUNTS.SAVE_OUTFIT,
   });
 });
 
@@ -493,7 +590,23 @@ outfits.post("/:id/like", async (c) => {
   // Record interaction for taste vector learning
   await recordOutfitInteraction(userId, outfitId, "like");
 
-  return c.json({ success: true });
+  // Award XP for liking outfit (fire-and-forget)
+  void (async () => {
+    try {
+      await GamificationService.awardXP(
+        userId,
+        XP_AMOUNTS.LIKE_OUTFIT,
+        "like_outfit",
+        outfitId,
+        "Liked outfit"
+      );
+      await GamificationService.updateChallengeProgress(userId, "like_outfit", 1);
+    } catch (err) {
+      console.error("[Gamification] Error in like:", err);
+    }
+  })();
+
+  return c.json({ success: true, xp_awarded: XP_AMOUNTS.LIKE_OUTFIT });
 });
 
 /**
@@ -789,17 +902,33 @@ outfits.post("/regenerate", async (c) => {
     })
   );
 
+  // Award XP for regeneration (Pro-only feature)
+  void (async () => {
+    try {
+      await GamificationService.awardXP(
+        userId,
+        XP_AMOUNTS.REGENERATE,
+        "regenerate",
+        undefined,
+        "Regenerated outfits"
+      );
+    } catch (err) {
+      console.error("[Gamification] Error in regenerate:", err);
+    }
+  })();
+
   return c.json({
     outfits: transformedOutfits,
     count: transformedOutfits.length,
     weather: formatWeatherResponse(weather),
     feedback_applied: feedback,
+    xp_awarded: XP_AMOUNTS.REGENERATE,
   });
 });
 
 /**
  * POST /:id/verify - Verify outfit with photo proof
- * Awards +25 bonus XP (total 50 XP for verified outfit)
+ * Awards +15 bonus XP (total 25 XP for verified outfit: 10 wear + 15 verify)
  */
 outfits.post("/:id/verify", async (c) => {
   const userId = getUserId(c);
@@ -880,19 +1009,37 @@ outfits.post("/:id/verify", async (c) => {
     return c.json({ error: "Failed to verify outfit" }, 500);
   }
 
-  // Award bonus XP (25 XP for verification, on top of 25 XP from wearing)
-  const bonusXp = 25;
-  await supabaseAdmin.rpc("add_user_xp", {
-    p_user_id: userId,
-    p_xp: bonusXp,
-  });
+  // Award bonus XP (15 XP for verification, on top of 10 XP from wearing)
+  const bonusXp = XP_AMOUNTS.VERIFY_OUTFIT;
+
+  // Use new gamification system
+  const xpResult = await GamificationService.awardXP(
+    userId,
+    bonusXp,
+    "verify_outfit",
+    outfitId,
+    "Photo verification"
+  );
+
+  // Update challenge progress
+  await GamificationService.updateChallengeProgress(userId, "verify_outfit", 1);
+
+  // Check for new achievements (verified outfits)
+  const newAchievements =
+    await GamificationService.checkAndUnlockAchievements(userId);
 
   return c.json({
     success: true,
     photo_url: photoUrl,
     bonus_xp_awarded: bonusXp,
-    total_xp_for_outfit: 50, // 25 base + 25 bonus
-    message: "Outfit verified! +25 bonus XP awarded.",
+    total_xp_for_outfit: XP_AMOUNTS.WEAR_OUTFIT + bonusXp, // 10 base + 15 bonus = 25
+    gamification: {
+      level_up: xpResult.level_up,
+      new_level: xpResult.new_level,
+      daily_goal_met: xpResult.daily_goal_met,
+      new_achievements: newAchievements,
+    },
+    message: `Outfit verified! +${bonusXp} bonus XP awarded.`,
   });
 });
 

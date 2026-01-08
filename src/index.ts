@@ -18,6 +18,7 @@ import styleQuizRoutes from "./routes/styleQuiz.js";
 import accountRoutes from "./routes/account.js";
 import { preGenerateOutfits } from "./jobs/preGenerate.js";
 import { sendMorningNotifications } from "./jobs/sendMorningNotifications.js";
+import { dailyGamificationReset } from "./jobs/dailyGamificationReset.js";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -118,6 +119,40 @@ app.get("/cron/morning-notifications", async (c) => {
       {
         success: false,
         error: "Morning notifications failed",
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
+      500
+    );
+  }
+});
+
+// Midnight daily gamification reset cron endpoint
+app.get("/cron/daily-gamification-reset", async (c) => {
+  const providedSecret = c.req.header("X-Cron-Secret") || c.req.query("secret");
+
+  if (!CRON_SECRET) {
+    console.error("[Cron] CRON_SECRET not configured");
+    return c.json({ error: "Cron not configured" }, 500);
+  }
+
+  if (providedSecret !== CRON_SECRET) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  console.log("[Cron] Starting daily gamification reset job via HTTP trigger");
+
+  try {
+    const result = await dailyGamificationReset();
+    return c.json({
+      message: "Daily gamification reset completed",
+      ...result,
+    });
+  } catch (error) {
+    console.error("[Cron] Daily gamification reset failed:", error);
+    return c.json(
+      {
+        success: false,
+        error: "Daily gamification reset failed",
         message: error instanceof Error ? error.message : "Unknown error",
       },
       500
