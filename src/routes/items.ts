@@ -9,6 +9,10 @@ import {
   analyzeWithFlorence,
   tagWithGemini,
 } from "../services/ai/index.js";
+import {
+  GamificationService,
+  XP_AMOUNTS,
+} from "../services/gamification.js";
 
 type Variables = {
   userId: string;
@@ -301,7 +305,54 @@ items.post("/", itemUploadLimit, async (c) => {
     console.error(`[AI] Background processing failed for ${data.id}:`, err);
   });
 
-  return c.json({ item: mapItemToResponse(data) }, 201);
+  // Award XP for adding item (fire-and-forget)
+  const gamificationPromise = (async () => {
+    try {
+      const xpResult = await GamificationService.awardXP(
+        userId,
+        XP_AMOUNTS.ADD_ITEM,
+        "add_item",
+        data.id,
+        "Added wardrobe item"
+      );
+
+      // Update challenge progress
+      await GamificationService.updateChallengeProgress(userId, "add_item", 1);
+
+      // Increment stats
+      await GamificationService.incrementStat(userId, "total_items_added", 1);
+
+      // Check for new achievements
+      const newAchievements =
+        await GamificationService.checkAndUnlockAchievements(userId);
+
+      return { xpResult, newAchievements };
+    } catch (err) {
+      console.error("[Gamification] Error in add item:", err);
+      return null;
+    }
+  })();
+
+  // Wait briefly for gamification to complete (but don't block too long)
+  const gamResult = await Promise.race([
+    gamificationPromise,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
+  ]);
+
+  return c.json(
+    {
+      item: mapItemToResponse(data),
+      gamification: gamResult
+        ? {
+            xp_awarded: XP_AMOUNTS.ADD_ITEM,
+            level_up: gamResult.xpResult?.level_up || false,
+            new_level: gamResult.xpResult?.new_level,
+            new_achievements: gamResult.newAchievements || [],
+          }
+        : undefined,
+    },
+    201
+  );
 });
 
 // POST /batch - Upload multiple items (max 10)
@@ -365,7 +416,52 @@ items.post("/batch", itemUploadLimit, async (c) => {
     status: "processing",
   }));
 
-  return c.json({ items: results }, 202);
+  // Award XP for each item added (fire-and-forget)
+  const itemCount = data.length;
+  void (async () => {
+    try {
+      // Award XP for each item
+      for (const item of data) {
+        await GamificationService.awardXP(
+          userId,
+          XP_AMOUNTS.ADD_ITEM,
+          "add_item",
+          item.id,
+          "Added wardrobe item (batch)"
+        );
+      }
+
+      // Update challenge progress for all items at once
+      await GamificationService.updateChallengeProgress(
+        userId,
+        "add_item",
+        itemCount
+      );
+
+      // Increment stats
+      await GamificationService.incrementStat(
+        userId,
+        "total_items_added",
+        itemCount
+      );
+
+      // Check for achievements
+      await GamificationService.checkAndUnlockAchievements(userId);
+    } catch (err) {
+      console.error("[Gamification] Error in batch add:", err);
+    }
+  })();
+
+  return c.json(
+    {
+      items: results,
+      gamification: {
+        xp_awarded: XP_AMOUNTS.ADD_ITEM * itemCount,
+        items_count: itemCount,
+      },
+    },
+    202
+  );
 });
 
 // DELETE /:id - Delete item and associated storage files
