@@ -21,4 +21,5 @@ endpoint = "/cron/morning-notifications"
 # Midnight UTC daily - gamification reset (XP, streaks, challenges)
 [[crons]]
 schedule = "0 0 * * *"
-endpoint = "/cron/daily-gamification-reset"
+endpoint = "https://${{RAILWAY_PUBLIC_DOMAIN}}/cron/daily-gamification-reset"
+headers = { authorization = "Bearer ${{CRON_SECRET}}" }

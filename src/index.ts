@@ -128,14 +128,8 @@ app.get("/cron/morning-notifications", async (c) => {
 
 // Midnight daily gamification reset cron endpoint
 app.get("/cron/daily-gamification-reset", async (c) => {
-  const providedSecret = c.req.header("X-Cron-Secret") || c.req.query("secret");
-
-  if (!CRON_SECRET) {
-    console.error("[Cron] CRON_SECRET not configured");
-    return c.json({ error: "Cron not configured" }, 500);
-  }
-
-  if (providedSecret !== CRON_SECRET) {
+  const authHeader = c.req.header("authorization");
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
