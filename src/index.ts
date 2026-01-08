@@ -19,6 +19,7 @@ import accountRoutes from "./routes/account.js";
 import { preGenerateOutfits } from "./jobs/preGenerate.js";
 import { sendMorningNotifications } from "./jobs/sendMorningNotifications.js";
 import { dailyGamificationReset } from "./jobs/dailyGamificationReset.js";
+import { deliverOutfits } from "./jobs/deliverOutfits.js";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -59,15 +60,8 @@ app.route("/webhooks", webhooksRoutes);
 
 // Cron endpoint (protected by secret)
 app.get("/cron/pre-generate", async (c) => {
-  // Verify cron secret
-  const providedSecret = c.req.header("X-Cron-Secret") || c.req.query("secret");
-
-  if (!CRON_SECRET) {
-    console.error("[Cron] CRON_SECRET not configured");
-    return c.json({ error: "Cron not configured" }, 500);
-  }
-
-  if (providedSecret !== CRON_SECRET) {
+  const authHeader = c.req.header("authorization");
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -92,16 +86,10 @@ app.get("/cron/pre-generate", async (c) => {
   }
 });
 
-// 9AM Morning notifications cron endpoint
+// 9AM Morning notifications cron endpoint (legacy - use deliver-outfits instead)
 app.get("/cron/morning-notifications", async (c) => {
-  const providedSecret = c.req.header("X-Cron-Secret") || c.req.query("secret");
-
-  if (!CRON_SECRET) {
-    console.error("[Cron] CRON_SECRET not configured");
-    return c.json({ error: "Cron not configured" }, 500);
-  }
-
-  if (providedSecret !== CRON_SECRET) {
+  const authHeader = c.req.header("authorization");
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -147,6 +135,34 @@ app.get("/cron/daily-gamification-reset", async (c) => {
       {
         success: false,
         error: "Daily gamification reset failed",
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
+      500
+    );
+  }
+});
+
+// Hourly outfit delivery cron endpoint (timezone-aware push notifications)
+app.get("/cron/deliver-outfits", async (c) => {
+  const authHeader = c.req.header("authorization");
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  console.log("[Cron] Starting hourly outfit delivery via HTTP trigger");
+
+  try {
+    const result = await deliverOutfits();
+    return c.json({
+      message: "Outfit delivery completed",
+      ...result,
+    });
+  } catch (error) {
+    console.error("[Cron] Outfit delivery failed:", error);
+    return c.json(
+      {
+        success: false,
+        error: "Outfit delivery failed",
         message: error instanceof Error ? error.message : "Unknown error",
       },
       500

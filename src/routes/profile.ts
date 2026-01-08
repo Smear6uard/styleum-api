@@ -36,13 +36,20 @@ profile.get("/", async (c) => {
 
 /**
  * PATCH / - Update user profile
- * Supports updating location and push notification settings
+ * Supports updating location, timezone, and push notification settings
  */
 profile.patch("/", async (c) => {
   const userId = getUserId(c);
   const body = await c.req.json().catch(() => ({}));
 
-  const { location_lat, location_lng, push_token, push_enabled, morning_notification_time } = body;
+  const {
+    location_lat,
+    location_lng,
+    push_token,
+    push_enabled,
+    morning_notification_time,
+    timezone,
+  } = body;
 
   // Build updates object with only provided fields
   const updates: Record<string, unknown> = {};
@@ -53,6 +60,7 @@ profile.patch("/", async (c) => {
   if (push_enabled !== undefined) updates.push_enabled = push_enabled;
   if (morning_notification_time !== undefined)
     updates.morning_notification_time = morning_notification_time;
+  if (timezone !== undefined) updates.timezone = timezone;
 
   if (Object.keys(updates).length === 0) {
     return c.json({ error: "No fields to update" }, 400);
@@ -68,6 +76,44 @@ profile.patch("/", async (c) => {
   console.log(`[Profile] Updated for user ${userId}:`, Object.keys(updates).join(", "));
 
   return c.json({ success: true, updated: Object.keys(updates) });
+});
+
+/**
+ * POST /push-token - Register device push token
+ * Stores the APNs device token for push notifications
+ */
+profile.post("/push-token", async (c) => {
+  const userId = getUserId(c);
+  const body = await c.req.json().catch(() => ({}));
+
+  const { token, platform } = body;
+
+  if (!token || typeof token !== "string") {
+    return c.json({ error: "Token is required" }, 400);
+  }
+
+  // Validate platform (for future Android support)
+  if (platform && platform !== "ios") {
+    return c.json({ error: "Invalid platform. Supported: ios" }, 400);
+  }
+
+  const { error } = await supabaseAdmin
+    .from("user_profiles")
+    .update({
+      push_token: token,
+      push_token_updated_at: new Date().toISOString(),
+      push_enabled: true,
+    })
+    .eq("id", userId);
+
+  if (error) {
+    console.error("[Profile] Failed to save push token:", error);
+    return c.json({ error: "Failed to save push token" }, 500);
+  }
+
+  console.log(`[Profile] Push token registered for user ${userId}`);
+
+  return c.json({ success: true });
 });
 
 export default profile;

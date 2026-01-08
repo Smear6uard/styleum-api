@@ -8,15 +8,23 @@ healthcheckTimeout = 100
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 
-# 4AM US Eastern = 9AM UTC
+# 3:30 AM UTC - Pre-generate outfits for all users
 [[crons]]
-schedule = "0 9 * * *"
-endpoint = "/cron/pre-generate"
+schedule = "30 3 * * *"
+endpoint = "https://${{RAILWAY_PUBLIC_DOMAIN}}/cron/pre-generate"
+headers = { authorization = "Bearer ${{CRON_SECRET}}" }
 
-# 9AM US Eastern = 2PM UTC
+# Every hour - Deliver outfits based on user timezone
+[[crons]]
+schedule = "0 * * * *"
+endpoint = "https://${{RAILWAY_PUBLIC_DOMAIN}}/cron/deliver-outfits"
+headers = { authorization = "Bearer ${{CRON_SECRET}}" }
+
+# 9AM US Eastern = 2PM UTC (legacy, can be removed once delivery cron is working)
 [[crons]]
 schedule = "0 14 * * *"
-endpoint = "/cron/morning-notifications"
+endpoint = "https://${{RAILWAY_PUBLIC_DOMAIN}}/cron/morning-notifications"
+headers = { authorization = "Bearer ${{CRON_SECRET}}" }
 
 # Midnight UTC daily - gamification reset (XP, streaks, challenges)
 [[crons]]
