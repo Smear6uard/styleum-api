@@ -17,3 +17,8 @@ endpoint = "/cron/pre-generate"
 [[crons]]
 schedule = "0 14 * * *"
 endpoint = "/cron/morning-notifications"
+
+# Midnight UTC daily - gamification reset (XP, streaks, challenges)
+[[crons]]
+schedule = "0 0 * * *"
+endpoint = "/cron/daily-gamification-reset"
