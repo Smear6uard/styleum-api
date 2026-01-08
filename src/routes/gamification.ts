@@ -15,8 +15,8 @@ type Variables = {
 const gamification = new Hono<{ Variables: Variables }>();
 
 /**
- * GET /stats - Get user's full gamification stats
- * Returns level, XP, streak, daily goal progress, etc.
+ * GET /stats - Get user's gamification stats
+ * Returns flat structure for iOS compatibility
  */
 gamification.get("/stats", async (c) => {
   const userId = getUserId(c);
@@ -27,7 +27,15 @@ gamification.get("/stats", async (c) => {
     return c.json({ error: "Failed to fetch gamification stats" }, 500);
   }
 
-  return c.json({ stats });
+  // Return flat structure that iOS expects
+  return c.json({
+    current_streak: stats.current_streak,
+    longest_streak: stats.longest_streak,
+    total_days_active: stats.daily_goals_streak, // Days where daily goal was met
+    streak_freezes: stats.streak_freezes,
+    xp: stats.total_xp,
+    level: stats.level,
+  });
 });
 
 /**
@@ -45,32 +53,37 @@ gamification.get("/levels", async (c) => {
 gamification.get("/achievements", async (c) => {
   const userId = getUserId(c);
 
-  const achievements = await GamificationService.getAchievements(userId);
+  try {
+    const achievements = await GamificationService.getAchievements(userId);
 
-  // Group by category
-  const grouped = achievements.reduce(
-    (acc, achievement) => {
-      const category = achievement.category;
-      if (!acc[category]) {
-        acc[category] = [];
-      }
-      acc[category].push(achievement);
-      return acc;
-    },
-    {} as Record<string, typeof achievements>
-  );
+    // Group by category
+    const grouped = achievements.reduce(
+      (acc, achievement) => {
+        const category = achievement.category || "other";
+        if (!acc[category]) {
+          acc[category] = [];
+        }
+        acc[category].push(achievement);
+        return acc;
+      },
+      {} as Record<string, typeof achievements>
+    );
 
-  // Calculate stats
-  const totalCount = achievements.length;
-  const unlockedCount = achievements.filter((a) => a.is_unlocked).length;
-  const unseenCount = achievements.filter((a) => a.is_unlocked && !a.is_seen).length;
+    // Calculate stats
+    const totalCount = achievements.length;
+    const unlockedCount = achievements.filter((a) => a.is_unlocked).length;
+    const unseenCount = achievements.filter((a) => a.is_unlocked && !a.is_seen).length;
 
-  return c.json({
-    achievements: grouped,
-    total: totalCount,
-    unlocked: unlockedCount,
-    unseen: unseenCount,
-  });
+    return c.json({
+      achievements: grouped,
+      total: totalCount,
+      unlocked: unlockedCount,
+      unseen: unseenCount,
+    });
+  } catch (error) {
+    console.error("[Gamification] Error in /achievements route:", error);
+    return c.json({ error: "Failed to fetch achievements", details: error instanceof Error ? error.message : "Unknown error" }, 500);
+  }
 });
 
 /**
@@ -302,6 +315,84 @@ gamification.get("/leaderboard", async (c) => {
   const leaderboard = await GamificationService.getLeaderboard(limit);
 
   return c.json({ leaderboard });
+});
+
+// ============================================================================
+// ROUTE ALIASES (iOS compatibility)
+// ============================================================================
+
+/**
+ * GET /daily-challenges - Alias for /challenges/daily
+ */
+gamification.get("/daily-challenges", async (c) => {
+  const userId = getUserId(c);
+
+  const challenges = await GamificationService.getDailyChallenges(userId);
+
+  const completedCount = challenges.filter((ch) => ch.is_completed).length;
+  const claimedCount = challenges.filter((ch) => ch.is_claimed).length;
+  const totalXP = challenges.reduce((sum, ch) => sum + ch.xp_reward, 0);
+  const claimedXP = challenges
+    .filter((ch) => ch.is_claimed)
+    .reduce((sum, ch) => sum + ch.xp_reward, 0);
+
+  return c.json({
+    challenges,
+    completed: completedCount,
+    claimed: claimedCount,
+    total_xp_available: totalXP,
+    xp_claimed: claimedXP,
+  });
+});
+
+/**
+ * GET /weekly-challenge - Alias for /challenges/weekly
+ */
+gamification.get("/weekly-challenge", async (c) => {
+  const userId = getUserId(c);
+
+  const challenge = await GamificationService.getWeeklyChallenge(userId);
+
+  return c.json({ challenge });
+});
+
+/**
+ * GET /activity-history - Alias for /activity/calendar
+ * Query params: year (YYYY), month (1-12)
+ */
+gamification.get("/activity-history", async (c) => {
+  const userId = getUserId(c);
+
+  const now = new Date();
+  const year = parseInt(c.req.query("year") ?? String(now.getFullYear()));
+  const month = parseInt(c.req.query("month") ?? String(now.getMonth() + 1));
+
+  if (isNaN(year) || isNaN(month) || month < 1 || month > 12) {
+    return c.json({ error: "Invalid year or month" }, 400);
+  }
+
+  const calendar = await GamificationService.getActivityCalendar(
+    userId,
+    year,
+    month
+  );
+
+  const totalXP = calendar.reduce((sum, day) => sum + day.xp_earned, 0);
+  const activeDays = calendar.length;
+  const streakDays = calendar.filter((day) => day.streak_maintained).length;
+  const goalDays = calendar.filter((day) => day.daily_goal_met).length;
+
+  return c.json({
+    year,
+    month,
+    days: calendar,
+    stats: {
+      total_xp: totalXP,
+      active_days: activeDays,
+      streak_days: streakDays,
+      goal_days: goalDays,
+    },
+  });
 });
 
 export default gamification;

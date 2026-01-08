@@ -885,7 +885,7 @@ export class GamificationService {
       const unlockedMap = new Map(
         (userAchievements || []).map((ua) => [
           ua.achievement_id,
-          { unlocked_at: ua.unlocked_at, is_seen: ua.is_seen },
+          { unlocked_at: ua.unlocked_at, is_seen: ua.is_seen ?? (ua.seen_at !== null) },
         ])
       );
 
@@ -1052,7 +1052,7 @@ export class GamificationService {
     try {
       const { error } = await supabaseAdmin
         .from("user_achievements")
-        .update({ is_seen: true })
+        .update({ seen_at: new Date().toISOString(), is_seen: true })
         .eq("user_id", userId)
         .eq("achievement_id", achievementId);
 
