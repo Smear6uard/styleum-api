@@ -43,6 +43,7 @@ export interface UserProfile {
   display_name: string | null;
   avatar_url: string | null;
   style_preferences: Record<string, unknown> | null;
+  tier_onboarding_seen_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -75,6 +76,10 @@ export interface UserSubscription {
   style_me_credits_used: number;
   style_me_credits_reset_at: string | null;
   is_trial: boolean;
+  in_grace_period: boolean;
+  grace_period_expires_at: string | null;
+  has_billing_issue: boolean;
+  billing_issue_detected_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -160,12 +165,19 @@ export async function isUserPro(userId: string): Promise<boolean> {
   const subscription = await getUserSubscription(userId);
   if (!subscription) return false;
 
-  if (!subscription.is_pro) return false;
+  const now = new Date();
 
-  if (subscription.expiry_date) {
+  // Check if subscription is active (not expired)
+  if (subscription.is_pro && subscription.expiry_date) {
     const expiryDate = new Date(subscription.expiry_date);
-    if (expiryDate < new Date()) return false;
+    if (expiryDate >= now) return true;
   }
 
-  return true;
+  // Check if in grace period (user retains pro access during grace period)
+  if (subscription.in_grace_period && subscription.grace_period_expires_at) {
+    const gracePeriodExpiry = new Date(subscription.grace_period_expires_at);
+    if (gracePeriodExpiry >= now) return true;
+  }
+
+  return false;
 }

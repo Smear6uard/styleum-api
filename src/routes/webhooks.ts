@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { supabaseAdmin } from "../services/supabase.js";
 import { createHmac, timingSafeEqual } from "crypto";
+import { GRACE_PERIOD_DAYS } from "../constants/tiers.js";
 
 const webhooks = new Hono();
 
@@ -59,7 +60,7 @@ webhooks.post("/revenuecat", async (c) => {
     case "RENEWAL":
     case "PRODUCT_CHANGE":
     case "UNCANCELLATION": {
-      // Set is_pro = true and update expiry date
+      // Set is_pro = true, update expiry date, and clear any grace period/billing issues
       const expiryDate = expiration_at_ms
         ? new Date(expiration_at_ms).toISOString()
         : null;
@@ -70,8 +71,14 @@ webhooks.post("/revenuecat", async (c) => {
           {
             user_id: app_user_id,
             is_pro: true,
+            subscription_tier: "pro",
             expiry_date: expiryDate,
             revenuecat_id: event.event?.original_transaction_id ?? null,
+            // Clear grace period and billing issue flags on successful payment
+            in_grace_period: false,
+            grace_period_expires_at: null,
+            has_billing_issue: false,
+            billing_issue_detected_at: null,
             updated_at: new Date().toISOString(),
           },
           { onConflict: "user_id" }
@@ -86,13 +93,26 @@ webhooks.post("/revenuecat", async (c) => {
       break;
     }
 
-    case "CANCELLATION":
+    case "CANCELLATION": {
+      // User cancelled but still has access until expiry date
+      // Just log - no immediate changes needed, access continues until expiration
+      console.log(`Subscription cancelled (still active until expiry) for user ${app_user_id}`);
+      break;
+    }
+
     case "EXPIRATION": {
-      // Set is_pro = false
+      // Subscription expired - start grace period
+      // User keeps pro access during grace period to resolve payment issues
+      const gracePeriodEnd = new Date();
+      gracePeriodEnd.setDate(gracePeriodEnd.getDate() + GRACE_PERIOD_DAYS);
+
       const { error } = await supabaseAdmin
         .from("user_subscriptions")
         .update({
-          is_pro: false,
+          is_pro: false, // Mark as not pro (grace period check in isUserPro() handles access)
+          subscription_tier: "pro", // Keep tier so they retain features during grace period
+          in_grace_period: true,
+          grace_period_expires_at: gracePeriodEnd.toISOString(),
           updated_at: new Date().toISOString(),
         })
         .eq("user_id", app_user_id);
@@ -102,13 +122,27 @@ webhooks.post("/revenuecat", async (c) => {
         return c.json({ error: "Database error" }, 500);
       }
 
-      console.log(`Subscription deactivated for user ${app_user_id}`);
+      console.log(`Subscription expired - ${GRACE_PERIOD_DAYS}-day grace period started for user ${app_user_id}`);
       break;
     }
 
     case "BILLING_ISSUE": {
-      // Log for monitoring - could trigger email notification
-      console.warn(`Billing issue for user ${app_user_id}`);
+      // Mark billing issue - user still has access but needs to resolve payment
+      const { error } = await supabaseAdmin
+        .from("user_subscriptions")
+        .update({
+          has_billing_issue: true,
+          billing_issue_detected_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", app_user_id);
+
+      if (error) {
+        console.error("Failed to update billing issue status:", error);
+        return c.json({ error: "Database error" }, 500);
+      }
+
+      console.warn(`Billing issue detected for user ${app_user_id}`);
       break;
     }
 

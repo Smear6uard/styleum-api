@@ -32,6 +32,12 @@ export type TierName = keyof typeof TIER_LIMITS;
 export type TierLimits = (typeof TIER_LIMITS)[TierName];
 
 /**
+ * Grace period duration in days after subscription expiration
+ * Users retain pro access during this period to allow for payment resolution
+ */
+export const GRACE_PERIOD_DAYS = 7;
+
+/**
  * Get limits for a given tier
  */
 export function getTierLimits(tier: TierName): TierLimits {

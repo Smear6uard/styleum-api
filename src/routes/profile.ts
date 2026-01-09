@@ -116,4 +116,33 @@ profile.post("/push-token", async (c) => {
   return c.json({ success: true });
 });
 
+/**
+ * POST /tier-onboarding-seen - Mark tier onboarding as seen
+ * Called when user has viewed the tier/subscription onboarding screens
+ */
+profile.post("/tier-onboarding-seen", async (c) => {
+  const userId = getUserId(c);
+
+  const now = new Date().toISOString();
+
+  const { error } = await supabaseAdmin
+    .from("user_profiles")
+    .update({
+      tier_onboarding_seen_at: now,
+    })
+    .eq("id", userId);
+
+  if (error) {
+    console.error("[Profile] Failed to mark tier onboarding as seen:", error);
+    return c.json({ error: "Failed to update profile" }, 500);
+  }
+
+  console.log(`[Profile] Tier onboarding marked as seen for user ${userId}`);
+
+  return c.json({
+    success: true,
+    tier_onboarding_seen_at: now,
+  });
+});
+
 export default profile;

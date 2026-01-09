@@ -387,6 +387,96 @@ gamification.post("/streak-freeze", async (c) => {
 });
 
 /**
+ * POST /use-streak-freeze - Manually use a streak freeze to protect a broken streak
+ * Uses a freeze to prevent streak loss when user hasn't engaged today
+ * Returns updated stats and freeze info
+ */
+gamification.post("/use-streak-freeze", async (c) => {
+  const userId = getUserId(c);
+
+  try {
+    const { supabaseAdmin } = await import("../services/supabase.js");
+    const { isUserPro } = await import("../services/supabase.js");
+    const { TIER_LIMITS } = await import("../constants/tiers.js");
+
+    // Get current gamification state
+    const { data: gamification, error: fetchError } = await supabaseAdmin
+      .from("user_gamification")
+      .select("*")
+      .eq("user_id", userId)
+      .single();
+
+    if (fetchError || !gamification) {
+      return c.json({ error: "Gamification data not found" }, 404);
+    }
+
+    // Check if user has a streak to protect
+    if (gamification.current_streak === 0) {
+      return c.json({ error: "No streak to protect" }, 400);
+    }
+
+    // Check if streak is at risk (last activity was before today)
+    const today = new Date().toISOString().split("T")[0];
+    const lastActivityDate = gamification.last_streak_activity_date;
+
+    if (lastActivityDate === today) {
+      return c.json({ error: "Streak is not at risk - you've already engaged today" }, 400);
+    }
+
+    // Check if user has freezes available
+    const freezesAvailable = gamification.streak_freezes_available || 0;
+    if (freezesAvailable <= 0) {
+      // Check tier to give appropriate error message
+      const isPro = await isUserPro(userId);
+      const maxFreezes = isPro ? TIER_LIMITS.pro.streakFreezesPerMonth : TIER_LIMITS.free.streakFreezesPerMonth;
+
+      return c.json({
+        error: "No streak freezes available",
+        upgrade_required: !isPro,
+        max_freezes: maxFreezes,
+        message: isPro
+          ? "You've used all your streak freezes this month"
+          : "Upgrade to Pro for more streak freezes"
+      }, 403);
+    }
+
+    // Use the freeze
+    const { error: updateError } = await supabaseAdmin
+      .from("user_gamification")
+      .update({
+        streak_freezes_available: freezesAvailable - 1,
+        last_streak_activity_date: today, // Update to today to preserve streak
+      })
+      .eq("user_id", userId);
+
+    if (updateError) {
+      console.error("[Gamification] Error using streak freeze:", updateError);
+      return c.json({ error: "Failed to use streak freeze" }, 500);
+    }
+
+    // Record freeze usage in daily_activity
+    await supabaseAdmin
+      .from("daily_activity")
+      .upsert({
+        user_id: userId,
+        activity_date: today,
+        freeze_used: true,
+      }, { onConflict: "user_id,activity_date" });
+
+    return c.json({
+      success: true,
+      streak_preserved: true,
+      current_streak: gamification.current_streak,
+      freezes_remaining: freezesAvailable - 1,
+      message: "Streak freeze used successfully! Your streak is protected."
+    });
+  } catch (err) {
+    console.error("[Gamification] Exception using streak freeze:", err);
+    return c.json({ error: "Failed to use streak freeze" }, 500);
+  }
+});
+
+/**
  * POST /restore-streak - Alias for /streak/restore (iOS compatible path)
  */
 gamification.post("/restore-streak", async (c) => {

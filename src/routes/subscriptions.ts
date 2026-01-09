@@ -1,5 +1,10 @@
 import { Hono } from "hono";
-import { getUserSubscription, isUserPro } from "../services/supabase.js";
+import {
+  getUserSubscription,
+  isUserPro,
+  getUser,
+  getUserGamification,
+} from "../services/supabase.js";
 import {
   checkItemLimit,
   checkCreditLimit,
@@ -70,23 +75,28 @@ subscriptions.get("/limits", async (c) => {
 
 /**
  * GET /tier - Get comprehensive tier info with all limits and usage
- * Returns current tier, all limits, current usage, and feature flags
+ * Returns current tier, all limits, current usage, feature flags, streak freezes, and onboarding status
  */
 subscriptions.get("/tier", async (c) => {
   const userId = getUserId(c);
 
   // Fetch all data in parallel
-  const [subscription, isPro, itemLimit, creditLimit, dailyLimit] =
+  const [subscription, isPro, itemLimit, creditLimit, dailyLimit, profile, gamification] =
     await Promise.all([
       getUserSubscription(userId),
       isUserPro(userId),
       checkItemLimit(userId),
       checkCreditLimit(userId),
       checkDailyOutfitLimit(userId),
+      getUser(userId),
+      getUserGamification(userId),
     ]);
 
   const tier: TierName = isPro ? "pro" : "free";
   const limits = TIER_LIMITS[tier];
+
+  // Get streak freezes info from gamification data
+  const streakFreezesAvailable = gamification?.streak_freezes ?? 0;
 
   return c.json({
     tier,
@@ -96,6 +106,9 @@ subscriptions.get("/tier", async (c) => {
           expires_at: subscription.expiry_date,
           platform: subscription.subscription_platform,
           is_active: isPro,
+          in_grace_period: subscription.in_grace_period ?? false,
+          grace_period_expires_at: subscription.grace_period_expires_at ?? null,
+          has_billing_issue: subscription.has_billing_issue ?? false,
         }
       : null,
     limits: {
@@ -144,6 +157,14 @@ subscriptions.get("/tier", async (c) => {
       canUseStyleMe: creditLimit.allowed,
       dailyLimitReached: !dailyLimit.allowed,
       monthlyLimitReached: !creditLimit.allowed,
+    },
+    streakFreezes: {
+      available: streakFreezesAvailable,
+      limit: limits.streakFreezesPerMonth,
+    },
+    onboarding: {
+      tier_onboarding_seen: !!profile?.tier_onboarding_seen_at,
+      tier_onboarding_seen_at: profile?.tier_onboarding_seen_at ?? null,
     },
   });
 });
