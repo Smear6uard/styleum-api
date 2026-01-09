@@ -20,6 +20,7 @@ import { preGenerateOutfits } from "./jobs/preGenerate.js";
 import { sendMorningNotifications } from "./jobs/sendMorningNotifications.js";
 import { dailyGamificationReset } from "./jobs/dailyGamificationReset.js";
 import { deliverOutfits } from "./jobs/deliverOutfits.js";
+import { supabaseAdmin } from "./services/supabase.js";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -163,6 +164,51 @@ app.get("/cron/deliver-outfits", async (c) => {
       {
         success: false,
         error: "Outfit delivery failed",
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
+      500
+    );
+  }
+});
+
+// Monthly credit reset cron endpoint (1st of each month at midnight UTC)
+app.get("/cron/reset-credits", async (c) => {
+  const authHeader = c.req.header("authorization");
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  console.log("[Cron] Starting monthly credit reset job via HTTP trigger");
+
+  try {
+    // Reset style_me_credits_used to 0 for all free tier users
+    const { data, error } = await supabaseAdmin
+      .from("user_subscriptions")
+      .update({
+        style_me_credits_used: 0,
+        style_me_credits_reset_at: new Date().toISOString(),
+      })
+      .eq("subscription_tier", "free")
+      .select("id");
+
+    if (error) {
+      throw new Error(`Failed to reset credits: ${error.message}`);
+    }
+
+    const resetCount = data?.length ?? 0;
+    console.log(`[Cron] Reset credits for ${resetCount} free tier users`);
+
+    return c.json({
+      success: true,
+      message: "Monthly credit reset completed",
+      usersReset: resetCount,
+    });
+  } catch (error) {
+    console.error("[Cron] Credit reset failed:", error);
+    return c.json(
+      {
+        success: false,
+        error: "Credit reset failed",
         message: error instanceof Error ? error.message : "Unknown error",
       },
       500

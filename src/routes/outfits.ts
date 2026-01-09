@@ -1,6 +1,10 @@
 import { Hono } from "hono";
 import { supabaseAdmin, isUserPro } from "../services/supabase.js";
-import { checkCreditLimit } from "../utils/limits.js";
+import {
+  checkCreditLimit,
+  checkDailyOutfitLimit,
+  getHistoryDayLimit,
+} from "../utils/limits.js";
 import { getUserId } from "../middleware/auth.js";
 import {
   styleMeLimitMiddleware,
@@ -263,10 +267,29 @@ outfits.get("/", async (c) => {
 
 /**
  * POST /generate - Generate outfits (Style Me)
+ * Uses daily limits: Free = 2/day, Pro = 4/day
  * Uses monthly rate limits: Free = 5/month, Pro = 75/month
  */
 outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
   const userId = getUserId(c);
+
+  // Check daily outfit limit first
+  const dailyLimit = await checkDailyOutfitLimit(userId);
+  if (!dailyLimit.allowed) {
+    return c.json(
+      {
+        error: "daily_limit_reached",
+        message: "You've reached your daily outfit generation limit",
+        daily: {
+          used: dailyLimit.used,
+          limit: dailyLimit.limit,
+          resetsAt: dailyLimit.resetsAt.toISOString(),
+        },
+        upgradeRequired: !dailyLimit.isPro,
+      },
+      429
+    );
+  }
 
   const body = await c.req.json().catch(() => ({}));
   const { occasion, mood, lat, lon, count = 3 } = body;
@@ -365,6 +388,9 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
     }
   })();
 
+  // Get updated daily limit info
+  const updatedDailyLimit = await checkDailyOutfitLimit(userId);
+
   return c.json({
     outfits: transformedOutfits,
     count: transformedOutfits.length,
@@ -374,6 +400,12 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
       used: creditInfo.used,
       limit: creditInfo.limit,
       resetsAt: creditInfo.resetsAt.toISOString(),
+    },
+    daily: {
+      used: updatedDailyLimit.used,
+      limit: updatedDailyLimit.limit,
+      remaining: updatedDailyLimit.limit - updatedDailyLimit.used,
+      resetsAt: updatedDailyLimit.resetsAt.toISOString(),
     },
   });
 });
@@ -734,12 +766,17 @@ outfits.delete("/saved/:id", async (c) => {
 
 /**
  * GET /history - Get outfit history with pagination
+ * Free users: Only last 7 days visible, older outfits marked as locked
+ * Pro users: Unlimited history access
  */
 outfits.get("/history", async (c) => {
   const userId = getUserId(c);
   const page = parseInt(c.req.query("page") ?? "1");
   const limit = parseInt(c.req.query("limit") ?? "20");
   const offset = (page - 1) * limit;
+
+  // Get history day limit for this user's tier
+  const historyLimit = await getHistoryDayLimit(userId);
 
   const { data, error, count } = await supabaseAdmin
     .from("outfit_history")
@@ -752,7 +789,7 @@ outfits.get("/history", async (c) => {
     return c.json({ error: "Failed to fetch history" }, 500);
   }
 
-  // Enrich with item details
+  // Enrich with item details and apply history day limit
   const enrichedHistory = await Promise.all(
     (data || []).map(async (entry) => {
       const { data: items } = await supabaseAdmin
@@ -762,9 +799,15 @@ outfits.get("/history", async (c) => {
         )
         .in("id", entry.items || []);
 
+      // Check if this entry is older than the cutoff (locked for free users)
+      const isLocked =
+        historyLimit.cutoffDate !== null &&
+        new Date(entry.worn_at) < historyLimit.cutoffDate;
+
       return {
         ...entry,
-        item_details: items || [],
+        item_details: isLocked ? [] : items || [], // Hide items if locked
+        locked: isLocked,
       };
     })
   );
@@ -776,6 +819,11 @@ outfits.get("/history", async (c) => {
       limit,
       total: count ?? 0,
       totalPages: Math.ceil((count ?? 0) / limit),
+    },
+    historyLimit: {
+      days: historyLimit.limitDays === Infinity ? null : historyLimit.limitDays,
+      unlimited: historyLimit.limitDays === Infinity,
+      cutoffDate: historyLimit.cutoffDate?.toISOString() ?? null,
     },
   });
 });

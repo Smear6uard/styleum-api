@@ -66,10 +66,15 @@ export interface UserSubscription {
   id: string;
   user_id: string;
   is_pro: boolean;
+  subscription_tier: "free" | "pro";
+  subscription_platform: "ios" | "android" | "web" | null;
   plan_type: string | null;
   started_at: string | null;
   expiry_date: string | null;
   revenuecat_id: string | null;
+  style_me_credits_used: number;
+  style_me_credits_reset_at: string | null;
+  is_trial: boolean;
   created_at: string;
   updated_at: string;
 }

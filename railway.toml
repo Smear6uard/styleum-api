@@ -31,3 +31,9 @@ headers = { authorization = "Bearer ${{CRON_SECRET}}" }
 schedule = "0 0 * * *"
 endpoint = "https://${{RAILWAY_PUBLIC_DOMAIN}}/cron/daily-gamification-reset"
 headers = { authorization = "Bearer ${{CRON_SECRET}}" }
+
+# 1st of each month at midnight UTC - reset monthly Style Me credits for free users
+[[crons]]
+schedule = "0 0 1 * *"
+endpoint = "https://${{RAILWAY_PUBLIC_DOMAIN}}/cron/reset-credits"
+headers = { authorization = "Bearer ${{CRON_SECRET}}" }
