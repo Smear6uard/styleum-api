@@ -45,9 +45,29 @@ users.get("/tier", async (c) => {
   // Get streak freezes info from gamification data
   const streakFreezesAvailable = gamification?.streak_freezes ?? 0;
 
+  // Calculate max wardrobe items for iOS (use -1 for unlimited)
+  const maxWardrobeItems = limits.maxWardrobeItems === Infinity ? -1 : limits.maxWardrobeItems;
+
   return c.json({
     tier,
+    // iOS expects isPro (camelCase)
+    isPro: isPro,
+    // Also include is_pro for backwards compatibility
     is_pro: isPro,
+    // iOS-expected limits shape
+    limits: {
+      max_wardrobe_items: maxWardrobeItems,
+      generations_per_month: creditLimit.limit,
+      generations_used: creditLimit.used,
+      generations_remaining: creditLimit.limit - creditLimit.used,
+      resets_at: getNextMonthStart(),
+      // Also include original fields for backwards compatibility
+      maxWardrobeItems: limits.maxWardrobeItems === Infinity ? null : limits.maxWardrobeItems,
+      dailyOutfits: limits.dailyOutfits,
+      monthlyStyleMeCredits: limits.monthlyStyleMeCredits,
+      outfitHistoryDays: limits.outfitHistoryDays === Infinity ? null : limits.outfitHistoryDays,
+      streakFreezesPerMonth: limits.streakFreezesPerMonth,
+    },
     subscription: subscription
       ? {
           expires_at: subscription.expiry_date,
@@ -58,15 +78,6 @@ users.get("/tier", async (c) => {
           has_billing_issue: subscription.has_billing_issue ?? false,
         }
       : null,
-    limits: {
-      maxWardrobeItems:
-        limits.maxWardrobeItems === Infinity ? null : limits.maxWardrobeItems,
-      dailyOutfits: limits.dailyOutfits,
-      monthlyStyleMeCredits: limits.monthlyStyleMeCredits,
-      outfitHistoryDays:
-        limits.outfitHistoryDays === Infinity ? null : limits.outfitHistoryDays,
-      streakFreezesPerMonth: limits.streakFreezesPerMonth,
-    },
     features: {
       hasAnalytics: limits.hasAnalytics,
       hasOccasionStyling: limits.hasOccasionStyling,
@@ -78,12 +89,8 @@ users.get("/tier", async (c) => {
     usage: {
       wardrobeItems: {
         used: itemLimit.used,
-        limit:
-          itemLimit.limit === Infinity ? null : (itemLimit.limit as number),
-        remaining:
-          itemLimit.limit === Infinity
-            ? null
-            : (itemLimit.limit as number) - itemLimit.used,
+        limit: itemLimit.limit === Infinity ? null : (itemLimit.limit as number),
+        remaining: itemLimit.limit === Infinity ? null : (itemLimit.limit as number) - itemLimit.used,
       },
       dailyOutfits: {
         used: dailyLimit.used,

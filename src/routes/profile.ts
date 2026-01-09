@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { supabaseAdmin } from "../services/supabase.js";
 import { getUserId } from "../middleware/auth.js";
 
@@ -35,16 +35,19 @@ profile.get("/", async (c) => {
 });
 
 /**
- * PATCH / - Update user profile
- * Supports updating location, timezone, and push notification settings
+ * Helper function to handle profile updates
+ * Supports both snake_case (location_lat) and iOS naming (latitude)
  */
-profile.patch("/", async (c) => {
+async function handleProfileUpdate(c: Context<{ Variables: Variables }>) {
   const userId = getUserId(c);
   const body = await c.req.json().catch(() => ({}));
 
   const {
+    // Support both naming conventions
     location_lat,
     location_lng,
+    latitude,
+    longitude,
     push_token,
     push_enabled,
     morning_notification_time,
@@ -54,8 +57,12 @@ profile.patch("/", async (c) => {
   // Build updates object with only provided fields
   const updates: Record<string, unknown> = {};
 
-  if (location_lat !== undefined) updates.location_lat = location_lat;
-  if (location_lng !== undefined) updates.location_lng = location_lng;
+  // Handle location - support both naming conventions
+  const lat = location_lat ?? latitude;
+  const lng = location_lng ?? longitude;
+  if (lat !== undefined) updates.location_lat = lat;
+  if (lng !== undefined) updates.location_lng = lng;
+
   if (push_token !== undefined) updates.push_token = push_token;
   if (push_enabled !== undefined) updates.push_enabled = push_enabled;
   if (morning_notification_time !== undefined)
@@ -76,7 +83,19 @@ profile.patch("/", async (c) => {
   console.log(`[Profile] Updated for user ${userId}:`, Object.keys(updates).join(", "));
 
   return c.json({ success: true, updated: Object.keys(updates) });
-});
+}
+
+/**
+ * PATCH / - Update user profile
+ * Supports updating location, timezone, and push notification settings
+ */
+profile.patch("/", handleProfileUpdate);
+
+/**
+ * PUT / - Update user profile (alias for PATCH for iOS compatibility)
+ * iOS uses PUT for profile updates
+ */
+profile.put("/", handleProfileUpdate);
 
 /**
  * POST /push-token - Register device push token
