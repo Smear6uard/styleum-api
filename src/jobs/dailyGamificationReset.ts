@@ -47,7 +47,7 @@ export async function dailyGamificationReset(): Promise<ResetResult> {
       .from("user_gamification")
       .update({ daily_xp_earned: 0 })
       .neq("daily_xp_earned", 0)
-      .select("id");
+      .select("user_id");
 
     if (resetError) {
       result.errors.push(`Reset XP error: ${resetError.message}`);
@@ -137,7 +137,7 @@ async function handleMissedStreaks(result: ResetResult): Promise<void> {
   // Find users with active streaks who didn't maintain it yesterday
   const { data: usersWithStreaks, error: streakError } = await supabaseAdmin
     .from("user_gamification")
-    .select("user_id, current_streak, streak_freezes, last_streak_activity_date")
+    .select("user_id, current_streak, streak_freezes_available, last_active_date")
     .gt("current_streak", 0);
 
   if (streakError) {
@@ -148,18 +148,18 @@ async function handleMissedStreaks(result: ResetResult): Promise<void> {
 
   for (const user of usersWithStreaks || []) {
     // Check if user already maintained streak yesterday
-    if (user.last_streak_activity_date === yesterdayStr) {
+    if (user.last_active_date === yesterdayStr) {
       continue; // Already active yesterday, streak is fine
     }
 
     // User missed yesterday - check if we can auto-freeze
-    if (user.streak_freezes > 0) {
+    if (user.streak_freezes_available > 0) {
       // Apply auto-freeze
       const { error: freezeError } = await supabaseAdmin
         .from("user_gamification")
         .update({
-          streak_freezes: user.streak_freezes - 1,
-          last_streak_activity_date: yesterdayStr, // Pretend they were active
+          streak_freezes_available: user.streak_freezes_available - 1,
+          last_active_date: yesterdayStr, // Pretend they were active
         })
         .eq("user_id", user.user_id);
 

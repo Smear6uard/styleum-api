@@ -87,6 +87,8 @@ users.get("/tier", async (c) => {
       unlimitedHistory: limits.outfitHistoryDays === Infinity,
     },
     usage: {
+      // iOS expects snake_case wardrobe_items
+      wardrobe_items: itemLimit.used,
       wardrobeItems: {
         used: itemLimit.used,
         limit: itemLimit.limit === Infinity ? null : (itemLimit.limit as number),
