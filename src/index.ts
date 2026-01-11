@@ -28,6 +28,12 @@ import { supabaseAdmin } from "./services/supabase.js";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
+// Validate CRON_SECRET at startup to prevent "Bearer undefined" bypass
+if (!CRON_SECRET || CRON_SECRET.length < 32) {
+  console.error("FATAL: CRON_SECRET must be set and at least 32 characters");
+  process.exit(1);
+}
+
 /**
  * Initialize internal cron jobs using node-cron
  * These run directly in the Node.js process instead of via HTTP triggers
@@ -137,6 +143,18 @@ app.use(
     allowHeaders: ["Content-Type", "Authorization"],
   })
 );
+
+// Security headers
+app.use("*", async (c, next) => {
+  await next();
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("X-XSS-Protection", "1; mode=block");
+  c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+  if (process.env.NODE_ENV === "production") {
+    c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+});
 
 // Public routes
 app.get("/", (c) => {
