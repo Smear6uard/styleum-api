@@ -13,6 +13,7 @@ import {
   GamificationService,
   XP_AMOUNTS,
 } from "../services/gamification.js";
+import { ReferralService } from "../services/referrals.js";
 
 type Variables = {
   userId: string;
@@ -258,6 +259,42 @@ items.get("/:id", async (c) => {
   return c.json({ item: mapItemToResponse(data) });
 });
 
+// PATCH /:id - Update item
+items.patch("/:id", async (c) => {
+  const userId = getUserId(c);
+  const itemId = c.req.param("id");
+
+  const body = await c.req.json();
+
+  // Accept both "name" and "item_name" for flexibility
+  const itemName = body.item_name ?? body.name ?? undefined;
+
+  // Build update object - only include fields that were provided
+  const updates: Record<string, unknown> = {};
+  if (itemName !== undefined) updates.item_name = itemName;
+  if (body.category !== undefined) updates.category = body.category;
+  if (body.is_favorite !== undefined) updates.is_favorite = body.is_favorite;
+  if (body.is_archived !== undefined) updates.is_archived = body.is_archived;
+
+  if (Object.keys(updates).length === 0) {
+    return c.json({ error: "No fields to update" }, 400);
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("wardrobe_items")
+    .update(updates)
+    .eq("id", itemId)
+    .eq("user_id", userId) // Security: ensure user owns item
+    .select()
+    .single();
+
+  if (error || !data) {
+    return c.json({ error: "Item not found or update failed" }, 404);
+  }
+
+  return c.json({ item: mapItemToResponse(data) });
+});
+
 // POST / - Upload single item
 items.post("/", itemUploadLimit, async (c) => {
   const userId = getUserId(c);
@@ -276,7 +313,9 @@ items.post("/", itemUploadLimit, async (c) => {
   }
 
   const body = await c.req.json();
-  const { image_url, item_name } = body;
+  const { image_url } = body;
+  // Accept both "name" and "item_name" for flexibility
+  const itemName = body.item_name ?? body.name ?? null;
 
   if (!image_url) {
     return c.json({ error: "image_url is required" }, 400);
@@ -288,7 +327,7 @@ items.post("/", itemUploadLimit, async (c) => {
     .insert({
       user_id: userId,
       original_image_url: image_url,
-      item_name: item_name || null,
+      item_name: itemName,
       processing_status: "processing",
       times_worn: 0,
       is_archived: false,
@@ -304,6 +343,13 @@ items.post("/", itemUploadLimit, async (c) => {
   processItemInBackground(data.id, image_url).catch((err) => {
     console.error(`[AI] Background processing failed for ${data.id}:`, err);
   });
+
+  // Check if first item triggers referral completion (fire-and-forget)
+  if (limitCheck.used === 0) {
+    ReferralService.completeReferral(userId).catch((err) => {
+      console.error("[Referral] Error completing referral:", err);
+    });
+  }
 
   // Award XP for adding item (fire-and-forget)
   const gamificationPromise = (async () => {
@@ -415,6 +461,13 @@ items.post("/batch", itemUploadLimit, async (c) => {
     id: item.id,
     status: "processing",
   }));
+
+  // Check if this is first item upload - triggers referral completion (fire-and-forget)
+  if (limitCheck.used === 0) {
+    ReferralService.completeReferral(userId).catch((err) => {
+      console.error("[Referral] Error completing referral:", err);
+    });
+  }
 
   // Award XP for each item added (fire-and-forget)
   const itemCount = data.length;
