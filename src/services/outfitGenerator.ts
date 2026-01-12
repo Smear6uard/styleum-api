@@ -483,14 +483,32 @@ function generateSingleOutfit(
     // Filter by:
     // 1. Not excluded
     // 2. Occasion match
-    // 3. Color compatibility
-    // 4. Weather appropriate
+    // 3. Weather appropriate
     let filtered = candidates.filter(
       (item) =>
         !excludeIds.has(item.id) &&
         matchesOccasion(item, occasion) &&
         item.weather_appropriate
     );
+
+    // Debug logging
+    console.log(
+      `[OutfitGen] Slot ${slot}: ${candidates.length} candidates, ${filtered.length} after weather filter`
+    );
+
+    // FOOTWEAR FALLBACK: If no weather-appropriate footwear, use any available
+    // Better to suggest sneakers in cold weather than fail to generate an outfit
+    if (filtered.length === 0 && slot === "footwear") {
+      const fallback = candidates.filter(
+        (item) => !excludeIds.has(item.id) && matchesOccasion(item, occasion)
+      );
+      if (fallback.length > 0) {
+        console.log(
+          `[OutfitGen] No weather-appropriate footwear, falling back to ${fallback.length} available`
+        );
+        filtered = fallback;
+      }
+    }
 
     // Color filter
     if (usedColors.length > 0) {
