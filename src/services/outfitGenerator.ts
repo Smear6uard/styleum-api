@@ -324,6 +324,103 @@ function generateReasoning(
 }
 
 /**
+ * Generate a practical styling tip based on outfit composition
+ */
+function generateStylingTip(
+  items: WardrobeItem[],
+  occasion: string | undefined,
+  weather: WeatherData
+): string {
+  const tips: string[] = [];
+
+  const hasTop = items.some((i) => getSlotForCategory(i.category) === "top");
+  const hasOuterwear = items.some((i) => getSlotForCategory(i.category) === "outerwear");
+  const hasBottom = items.some((i) => getSlotForCategory(i.category) === "bottom");
+
+  // Get average formality
+  const avgFormality = items.reduce((sum, i) => sum + (i.formality_score || 5), 0) / items.length;
+
+  // Tucking tips for formal/smart casual
+  if (hasTop && hasBottom && avgFormality >= 5) {
+    tips.push("Tuck in the top for a more polished silhouette");
+  }
+
+  // Casual sleeve rolling
+  if (hasTop && avgFormality < 5) {
+    tips.push("Roll up the sleeves for an effortless casual look");
+  }
+
+  // Layering tips
+  if (hasOuterwear && weather.temperature > 18) {
+    tips.push("Carry the jacket—perfect for when it cools down");
+  }
+
+  // Occasion-specific
+  if (occasion === "date") {
+    tips.push("Add a subtle accessory to elevate the look");
+  } else if (occasion === "work" || occasion === "business") {
+    tips.push("Keep accessories minimal and professional");
+  }
+
+  return tips[0] || "A versatile combination that works as-is";
+}
+
+/**
+ * Generate description of why the outfit colors work together
+ */
+function generateColorHarmonyDescription(items: WardrobeItem[]): string {
+  const colors = items
+    .map((i) => i.colors?.primary?.toLowerCase())
+    .filter((c): c is string => !!c);
+
+  if (colors.length < 2) {
+    return "A cohesive monochromatic palette";
+  }
+
+  // Color categories
+  const neutrals = ["black", "white", "gray", "grey", "beige", "cream", "tan", "khaki", "brown", "navy"];
+  const warms = ["red", "orange", "yellow", "coral", "burgundy", "rust", "terracotta"];
+  const cools = ["blue", "green", "teal", "mint", "purple", "lavender"];
+
+  const hasNeutrals = colors.some((c) => neutrals.some((n) => c.includes(n)));
+  const hasWarms = colors.some((c) => warms.some((w) => c.includes(w)));
+  const hasCools = colors.some((c) => cools.some((cl) => c.includes(cl)));
+
+  // All neutrals
+  if (colors.every((c) => neutrals.some((n) => c.includes(n)))) {
+    if (colors.some((c) => c.includes("navy")) && colors.some((c) => c.includes("khaki") || c.includes("tan"))) {
+      return "Navy and khaki create a timeless nautical palette";
+    }
+    if (colors.some((c) => c.includes("black")) && colors.some((c) => c.includes("white"))) {
+      return "Classic black and white for sharp contrast";
+    }
+    return "Neutrals blend seamlessly for an understated elegance";
+  }
+
+  // Warm + neutral
+  if (hasWarms && hasNeutrals && !hasCools) {
+    return "Warm tones grounded by neutrals for a balanced look";
+  }
+
+  // Cool + neutral
+  if (hasCools && hasNeutrals && !hasWarms) {
+    return "Cool tones paired with neutrals keep it fresh and refined";
+  }
+
+  // Mixed warm and cool (complementary)
+  if (hasWarms && hasCools) {
+    return "Complementary warm and cool tones add visual interest";
+  }
+
+  // Earth tones
+  if (colors.every((c) => ["brown", "tan", "olive", "khaki", "rust", "beige", "cream"].some((e) => c.includes(e)))) {
+    return "Earth tones create a naturally harmonious palette";
+  }
+
+  return "Colors work together for a cohesive outfit";
+}
+
+/**
  * Check if item matches occasion formality
  */
 function matchesOccasion(item: WardrobeItem, occasion: string | undefined): boolean {
@@ -444,6 +541,8 @@ function generateSingleOutfit(
   const vibe = generateVibe(selectedItems, styleScore);
   const name = generateOutfitName(selectedItems, occasion, vibe);
   const reasoning = generateReasoning(selectedItems, colorHarmonyScore, avgTasteScore, occasion);
+  const stylingTip = generateStylingTip(selectedItems, occasion, weather);
+  const colorHarmonyDesc = generateColorHarmonyDescription(selectedItems);
 
   return {
     items: selectedItems,
@@ -456,6 +555,8 @@ function generateSingleOutfit(
     name,
     vibe,
     reasoning,
+    styling_tip: stylingTip,
+    color_harmony_description: colorHarmonyDesc,
     confidence_score: Math.round(styleScore * 100) / 100,
   };
 }
