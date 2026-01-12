@@ -560,19 +560,24 @@ export async function recordOutfitInteraction(
 
   if (!items || items.length === 0) return;
 
-  // Average outfit embedding
+  // Average outfit embedding - use Array.isArray for proper type checking
   const embeddings = items
-    .map((item) => item.embedding as number[] | null)
-    .filter((e): e is number[] => !!e);
+    .map((item) => item.embedding)
+    .filter((e): e is number[] => Array.isArray(e) && e.length > 0);
 
   if (embeddings.length === 0) return;
 
-  const avgEmbedding = embeddings[0].map((_, i) =>
-    embeddings.reduce((sum, emb) => sum + emb[i], 0) / embeddings.length
-  );
+  try {
+    const avgEmbedding = embeddings[0].map((_, i) =>
+      embeddings.reduce((sum, emb) => sum + emb[i], 0) / embeddings.length
+    );
 
-  // Update taste vector
-  await updateTasteVector(userId, avgEmbedding, interactionType);
+    // Update taste vector
+    await updateTasteVector(userId, avgEmbedding, interactionType);
+  } catch (err) {
+    console.error("[OutfitGen] Failed to update taste vector:", err);
+    // Don't crash the request - taste tracking is non-critical
+  }
 }
 
 /**
@@ -597,6 +602,8 @@ export async function saveGeneratedOutfit(
       outfit_name: outfit.name,
       vibe: outfit.vibe,
       reasoning: outfit.reasoning,
+      styling_tip: outfit.styling_tip || null,
+      color_harmony_description: outfit.color_harmony_description || null,
       confidence_score: outfit.confidence_score,
       weather_temp: weather?.temperature,
       weather_condition: weather?.condition,

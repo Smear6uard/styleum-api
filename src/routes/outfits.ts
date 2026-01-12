@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { supabaseAdmin, isUserPro } from "../services/supabase.js";
 import {
-  checkCreditLimit,
   checkDailyOutfitLimit,
   getHistoryDayLimit,
 } from "../utils/limits.js";
@@ -17,7 +16,6 @@ import {
   AVAILABLE_MOODS,
   type GenerationConstraints,
 } from "../services/outfitGenerator.js";
-import { updateTasteVector } from "../services/tasteVector.js";
 import { getWeatherByCoords, type WeatherData } from "../services/weather.js";
 import {
   GamificationService,
@@ -225,8 +223,8 @@ outfits.get("/", async (c) => {
         name: outfit.outfit_name || "Styled Outfit",
         vibe: outfit.vibe || "Casual",
         reasoning: outfit.reasoning || "",
-        styling_tip: undefined,
-        color_harmony_description: undefined,
+        styling_tip: outfit.styling_tip || undefined,
+        color_harmony_description: outfit.color_harmony_description || undefined,
         style_score: outfit.style_score || 0.8,
         confidence_score: outfit.confidence_score || 0.8,
         occasion_match: false,
@@ -292,7 +290,21 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
   }
 
   const body = await c.req.json().catch(() => ({}));
-  const { occasion, mood, lat, lon, count = 3 } = body;
+  let { occasion, mood, lat, lon, count = 3 } = body;
+
+  // Fall back to user profile location if not provided in request
+  if (lat === undefined || lon === undefined) {
+    const { data: profile } = await supabaseAdmin
+      .from("user_profiles")
+      .select("location_lat, location_lng")
+      .eq("id", userId)
+      .single();
+
+    if (profile?.location_lat && profile?.location_lng) {
+      lat = lat ?? profile.location_lat;
+      lon = lon ?? profile.location_lng;
+    }
+  }
 
   // Mood filtering is Pro-only
   const isPro = await isUserPro(userId);
