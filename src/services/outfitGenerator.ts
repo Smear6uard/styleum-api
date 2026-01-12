@@ -750,34 +750,40 @@ export async function saveGeneratedOutfit(
   occasion?: string,
   weather?: WeatherData
 ): Promise<string | null> {
+  console.log(`[OutfitGen] Saving outfit for user ${userId}, items: ${outfit.item_ids.join(", ")}`);
+
+  const insertData = {
+    user_id: userId,
+    items: outfit.item_ids,
+    occasion: occasion || null,
+    style_score: outfit.style_score,
+    color_harmony_score: outfit.color_harmony_score,
+    taste_alignment_score: outfit.taste_alignment_score,
+    weather_score: outfit.weather_score,
+    outfit_name: outfit.name,
+    vibe: outfit.vibe,
+    reasoning: outfit.reasoning,
+    styling_tip: outfit.styling_tip || null,
+    color_harmony_description: outfit.color_harmony_description || null,
+    confidence_score: outfit.confidence_score,
+    weather_temp: weather?.temperature,
+    weather_condition: weather?.condition,
+    is_saved: false,
+    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours
+  };
+
   const { data, error } = await supabaseAdmin
     .from("generated_outfits")
-    .insert({
-      user_id: userId,
-      items: outfit.item_ids,
-      occasion: occasion || null,
-      style_score: outfit.style_score,
-      color_harmony_score: outfit.color_harmony_score,
-      taste_alignment_score: outfit.taste_alignment_score,
-      weather_score: outfit.weather_score,
-      outfit_name: outfit.name,
-      vibe: outfit.vibe,
-      reasoning: outfit.reasoning,
-      styling_tip: outfit.styling_tip || null,
-      color_harmony_description: outfit.color_harmony_description || null,
-      confidence_score: outfit.confidence_score,
-      weather_temp: weather?.temperature,
-      weather_condition: weather?.condition,
-      is_saved: false,
-      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours
-    })
+    .insert(insertData)
     .select("id")
     .single();
 
   if (error) {
     console.error("[OutfitGen] Failed to save outfit:", error);
+    console.error("[OutfitGen] Insert data was:", JSON.stringify(insertData));
     return null;
   }
 
+  console.log(`[OutfitGen] Saved outfit with ID: ${data.id}`);
   return data.id;
 }

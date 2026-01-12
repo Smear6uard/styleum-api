@@ -338,6 +338,9 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
   const savedOutfits = await Promise.all(
     generatedOutfits.map(async (outfit) => {
       const outfitId = await saveGeneratedOutfit(userId, outfit, occasion, weather);
+      if (!outfitId) {
+        console.error(`[Outfits] Failed to save outfit, items: ${outfit.item_ids.join(", ")}`);
+      }
       return {
         id: outfitId,
         ...outfit,
@@ -345,9 +348,18 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
     })
   );
 
-  // Transform outfits for iOS format
+  // Filter out any outfits that failed to save
+  const successfullySaved = savedOutfits.filter((o) => o.id !== null);
+  if (successfullySaved.length === 0) {
+    console.error(`[Outfits] All ${savedOutfits.length} outfits failed to save`);
+    return c.json({ error: "Failed to save outfits to database" }, 500);
+  }
+
+  console.log(`[Outfits] Saved ${successfullySaved.length}/${savedOutfits.length} outfits`);
+
+  // Transform outfits for iOS format (only successfully saved ones)
   const transformedOutfits = await Promise.all(
-    savedOutfits.map(async (outfit) => {
+    successfullySaved.map(async (outfit) => {
       const { data: items } = await supabaseAdmin
         .from("wardrobe_items")
         .select(
@@ -355,14 +367,14 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
         )
         .in("id", outfit.item_ids);
 
-      return transformOutfitForIOS(outfit, items || [], outfit.id || "");
+      return transformOutfitForIOS(outfit, items || [], outfit.id!);
     })
   );
 
   // Get updated credit info
   const creditInfo = await checkStyleMeLimit(userId);
 
-  console.log(`[Outfits] Generated ${transformedOutfits.length} outfits`);
+  console.log(`[Outfits] Returning ${transformedOutfits.length} outfits`);
 
   // Award XP for viewing/generating outfits (fire-and-forget)
   void (async () => {
