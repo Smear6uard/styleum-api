@@ -970,8 +970,12 @@ export class GamificationService {
         }
       });
 
-      return (allAchievements || []).map((a) => {
-        const unlocked = unlockedMap.get(a.id);
+      // Process achievements and unlock any newly completed ones
+      const achievements: Achievement[] = [];
+      const newlyUnlocked: string[] = [];
+
+      for (const a of allAchievements || []) {
+        const existingUnlock = unlockedMap.get(a.id);
         let progress = 0;
 
         // Calculate progress based on requirement type
@@ -1013,7 +1017,33 @@ export class GamificationService {
             progress = 0;
         }
 
-        return {
+        const isCompleted = progress >= a.requirement_value;
+        const wasAlreadyUnlocked = !!existingUnlock?.unlocked_at;
+
+        // If newly completed, unlock the achievement
+        if (isCompleted && !wasAlreadyUnlocked) {
+          newlyUnlocked.push(a.id);
+          // Insert into user_achievements
+          await supabaseAdmin.from("user_achievements").upsert(
+            {
+              user_id: userId,
+              achievement_id: a.id,
+              unlocked_at: new Date().toISOString(),
+              is_seen: false,
+            },
+            { onConflict: "user_id,achievement_id" }
+          );
+          // Award XP for the achievement
+          await this.awardXP(
+            userId,
+            a.xp_reward,
+            "achievement",
+            a.id,
+            `Achievement unlocked: ${a.name}`
+          );
+        }
+
+        achievements.push({
           id: a.id,
           name: a.name,
           description: a.description,
@@ -1022,12 +1052,18 @@ export class GamificationService {
           xp_reward: a.xp_reward,
           requirement_type: a.requirement_type,
           requirement_value: a.requirement_value,
-          is_unlocked: !!unlocked,
-          unlocked_at: unlocked?.unlocked_at || null,
-          is_seen: unlocked?.is_seen ?? true,
+          is_unlocked: isCompleted || wasAlreadyUnlocked,
+          unlocked_at: existingUnlock?.unlocked_at || (isCompleted ? new Date().toISOString() : null),
+          is_seen: wasAlreadyUnlocked ? (existingUnlock?.is_seen ?? true) : false,
           progress: Math.min(progress, a.requirement_value),
-        };
-      });
+        });
+      }
+
+      if (newlyUnlocked.length > 0) {
+        console.log(`[Gamification] Unlocked ${newlyUnlocked.length} achievements for user ${userId}:`, newlyUnlocked);
+      }
+
+      return achievements;
     } catch (err) {
       console.error("[Gamification] Exception getting achievements:", err);
       return [];
