@@ -766,7 +766,7 @@ export async function saveGeneratedOutfit(
     styling_tip: outfit.styling_tip || null,
     color_harmony_description: outfit.color_harmony_description || null,
     confidence_score: outfit.confidence_score,
-    weather_temp: weather?.temperature,
+    weather_temp: weather?.temperature != null ? Math.round(weather.temperature) : null,
     weather_condition: weather?.condition,
     is_saved: false,
     expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours
