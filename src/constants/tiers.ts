@@ -17,7 +17,7 @@ export const TIER_LIMITS = {
   },
   pro: {
     maxWardrobeItems: Infinity,
-    dailyOutfits: 4,
+    dailyOutfits: Infinity,
     monthlyStyleMeCredits: 75,
     outfitHistoryDays: Infinity,
     streakFreezesPerMonth: 5,

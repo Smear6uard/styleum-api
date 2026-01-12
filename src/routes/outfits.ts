@@ -265,7 +265,7 @@ outfits.get("/", async (c) => {
 
 /**
  * POST /generate - Generate outfits (Style Me)
- * Uses daily limits: Free = 2/day, Pro = 4/day
+ * Uses daily limits: Free = 2/day, Pro = unlimited
  * Uses monthly rate limits: Free = 5/month, Pro = 75/month
  */
 outfits.post("/generate", styleMeLimitMiddleware, async (c) => {

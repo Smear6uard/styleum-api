@@ -72,7 +72,7 @@ export async function checkCreditLimit(userId: string): Promise<LimitCheck> {
 
 /**
  * Check daily outfit generation limit for a user
- * Free: 2/day, Pro: 4/day
+ * Free: 2/day, Pro: unlimited
  */
 export async function checkDailyOutfitLimit(
   userId: string
