@@ -194,6 +194,35 @@ function getSlotForCategory(category: string | null | undefined): string | null 
  * Get user's wardrobe items
  */
 async function getUserWardrobe(userId: string): Promise<WardrobeItem[]> {
+  // Debug: First log all items regardless of status
+  const { data: allItems } = await supabaseAdmin
+    .from("wardrobe_items")
+    .select("id, category, processing_status, is_archived")
+    .eq("user_id", userId);
+
+  console.log(`[OutfitGen] Total items for user: ${allItems?.length || 0}`);
+  if (allItems && allItems.length > 0) {
+    const byStatus = allItems.reduce(
+      (acc, item) => {
+        const status = item.processing_status || "null";
+        acc[status] = (acc[status] || 0) + 1;
+        return acc;
+      },
+      {} as Record<string, number>
+    );
+    console.log(`[OutfitGen] Items by status:`, JSON.stringify(byStatus));
+
+    const archived = allItems.filter((i) => i.is_archived).length;
+    if (archived > 0) {
+      console.log(`[OutfitGen] Archived items: ${archived}`);
+    }
+
+    // Log categories for debugging
+    const categories = allItems.map((i) => i.category).filter(Boolean);
+    console.log(`[OutfitGen] Categories: ${categories.join(", ")}`);
+  }
+
+  // Actual query with filters
   const { data, error } = await supabaseAdmin
     .from("wardrobe_items")
     .select(
@@ -208,6 +237,7 @@ async function getUserWardrobe(userId: string): Promise<WardrobeItem[]> {
     return [];
   }
 
+  console.log(`[OutfitGen] Eligible items after filters: ${data?.length || 0}`);
   return data || [];
 }
 
@@ -595,10 +625,22 @@ export async function generateOutfits(params: GenerationParams): Promise<Generat
   // Group by slot
   const slotGroups = groupBySlot(sortedItems) as Record<string, ScoredItem[]>;
 
+  // Debug: Log items by slot
+  console.log(
+    `[OutfitGen] Items by slot: top=${slotGroups.top?.length || 0}, bottom=${slotGroups.bottom?.length || 0}, footwear=${slotGroups.footwear?.length || 0}, outerwear=${slotGroups.outerwear?.length || 0}, unknown=${slotGroups.unknown?.length || 0}`
+  );
+
+  // Log unknown categories for debugging
+  if (slotGroups.unknown?.length > 0) {
+    const unknownCats = slotGroups.unknown.map((i) => i.category).join(", ");
+    console.log(`[OutfitGen] Unrecognized categories: ${unknownCats}`);
+  }
+
   // Check if we have items in required slots
   const hasRequired = OUTFIT_SLOTS.every((slot) => (slotGroups[slot]?.length ?? 0) > 0);
   if (!hasRequired) {
-    console.log("[OutfitGen] Missing items in required slots");
+    const missing = OUTFIT_SLOTS.filter((slot) => (slotGroups[slot]?.length ?? 0) === 0);
+    console.log(`[OutfitGen] Missing items in required slots: ${missing.join(", ")}`);
     return { outfits: [], weather };
   }
 
