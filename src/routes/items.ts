@@ -269,12 +269,18 @@ items.patch("/:id", async (c) => {
   // Accept both "name" and "item_name" for flexibility
   const itemName = body.item_name ?? body.name ?? undefined;
 
+  // Accept both camelCase and snake_case for wear stats
+  const timesWorn = body.times_worn ?? body.timesWorn ?? undefined;
+  const lastWornAt = body.last_worn_at ?? body.lastWorn ?? body.lastWornAt ?? undefined;
+
   // Build update object - only include fields that were provided
   const updates: Record<string, unknown> = {};
   if (itemName !== undefined) updates.item_name = itemName;
   if (body.category !== undefined) updates.category = body.category;
   if (body.is_favorite !== undefined) updates.is_favorite = body.is_favorite;
   if (body.is_archived !== undefined) updates.is_archived = body.is_archived;
+  if (timesWorn !== undefined) updates.times_worn = timesWorn;
+  if (lastWornAt !== undefined) updates.last_worn_at = lastWornAt;
 
   if (Object.keys(updates).length === 0) {
     return c.json({ error: "No fields to update" }, 400);
