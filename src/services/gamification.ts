@@ -916,20 +916,74 @@ export class GamificationService {
         .eq("user_id", userId)
         .not("photo_url", "is", null);
 
+      // Get distinct category count
+      const { data: categoryData } = await supabaseAdmin
+        .from("wardrobe_items")
+        .select("category")
+        .eq("user_id", userId)
+        .eq("is_archived", false)
+        .not("category", "is", null);
+      const categoryCount = new Set((categoryData || []).map((i) => i.category)).size;
+
+      // Get distinct seasons count (from array field)
+      const { data: seasonData } = await supabaseAdmin
+        .from("wardrobe_items")
+        .select("seasons")
+        .eq("user_id", userId)
+        .eq("is_archived", false);
+      const allSeasons = new Set<string>();
+      (seasonData || []).forEach((item) => {
+        if (Array.isArray(item.seasons)) {
+          item.seasons.forEach((s: string) => allSeasons.add(s));
+        }
+      });
+      const seasonCount = allSeasons.size;
+
+      // Get distinct primary colors count
+      const { data: colorData } = await supabaseAdmin
+        .from("wardrobe_items")
+        .select("colors")
+        .eq("user_id", userId)
+        .eq("is_archived", false);
+      const primaryColors = new Set<string>();
+      (colorData || []).forEach((item) => {
+        const colors = item.colors as { primary?: string } | null;
+        if (colors?.primary) {
+          primaryColors.add(colors.primary);
+        }
+      });
+      const colorCount = primaryColors.size;
+
+      // Get max style score (as percentage)
+      const { data: styleScoreData } = await supabaseAdmin
+        .from("outfit_history")
+        .select("outfit_id, generated_outfits(style_score)")
+        .eq("user_id", userId);
+      let maxStyleScore = 0;
+      (styleScoreData || []).forEach((oh) => {
+        const outfit = oh.generated_outfits as { style_score?: number } | null;
+        if (outfit?.style_score) {
+          const scorePercent = Math.round(outfit.style_score * 100);
+          if (scorePercent > maxStyleScore) {
+            maxStyleScore = scorePercent;
+          }
+        }
+      });
+
       return (allAchievements || []).map((a) => {
         const unlocked = unlockedMap.get(a.id);
         let progress = 0;
 
         // Calculate progress based on requirement type
         switch (a.requirement_type) {
-          case "items_count":
+          case "items_uploaded":
             progress = itemCount || 0;
             break;
           case "outfits_worn":
             progress = outfitCount || 0;
             break;
           case "streak_days":
-            progress = gamification?.current_streak || 0;
+            progress = gamification?.longest_streak || 0;
             break;
           case "total_xp":
             progress = gamification?.total_xp || 0;
@@ -937,7 +991,22 @@ export class GamificationService {
           case "verified_outfits":
             progress = verifiedCount || 0;
             break;
-          case "daily_goals":
+          case "categories_owned":
+            progress = categoryCount;
+            break;
+          case "seasons_covered":
+            progress = seasonCount;
+            break;
+          case "colors_owned":
+            progress = colorCount;
+            break;
+          case "outfits_shared":
+            progress = (gamification?.total_outfits_shared as number) || 0;
+            break;
+          case "max_style_score":
+            progress = maxStyleScore;
+            break;
+          case "daily_goals_streak":
             progress = gamification?.daily_goals_streak || 0;
             break;
           default:
