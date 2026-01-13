@@ -11,7 +11,8 @@ type Variables = {
 const styleQuiz = new Hono<{ Variables: Variables }>();
 
 /**
- * POST /submit - Submit style quiz results (for users who skipped during onboarding)
+ * POST /submit - Submit or retake style quiz results
+ * Supports both initial submission and retakes (taste vector uses UPSERT)
  * Body:
  *   - liked_style_ids: string[] (UUIDs of liked style reference images)
  *   - disliked_style_ids: string[] (UUIDs of disliked style reference images)
@@ -31,17 +32,6 @@ styleQuiz.post("/submit", async (c) => {
       { error: "liked_style_ids and disliked_style_ids arrays required" },
       400
     );
-  }
-
-  // Check if already completed
-  const { data: profile } = await supabaseAdmin
-    .from("user_profiles")
-    .select("style_quiz_completed")
-    .eq("id", userId)
-    .single();
-
-  if (profile?.style_quiz_completed) {
-    return c.json({ error: "Style quiz already completed" }, 409);
   }
 
   const totalSwipes = liked_style_ids.length + disliked_style_ids.length;

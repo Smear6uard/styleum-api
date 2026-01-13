@@ -240,7 +240,7 @@ async function getUserWardrobe(userId: string): Promise<WardrobeItem[]> {
   const { data, error } = await supabaseAdmin
     .from("wardrobe_items")
     .select(
-      "id, category, subcategory, embedding, colors, formality_score, seasons, occasions, style_vibes, processed_image_url, original_image_url, item_name, fit, length"
+      "id, category, subcategory, embedding, colors, formality_score, seasons, occasions, style_vibes, processed_image_url, original_image_url, item_name, fit, length, last_worn_at"
     )
     .eq("user_id", userId)
     .eq("is_archived", false)
@@ -288,6 +288,35 @@ function scoreTasteAlignment(itemEmbedding: number[] | null, tasteVector: number
   const similarity = cosineSimilarity(itemEmbedding, tasteVector);
   // Convert from [-1, 1] to [0, 1]
   return (similarity + 1) / 2;
+}
+
+/**
+ * Pick an item using weighted random selection from top candidates.
+ * Higher scores = higher probability of selection, but not guaranteed.
+ * This adds variety to outfit generation instead of always picking the top item.
+ */
+function weightedRandomPick<T extends { score: number }>(
+  candidates: T[],
+  topN: number = 5
+): T {
+  if (candidates.length === 0) throw new Error("No candidates to pick from");
+  if (candidates.length === 1) return candidates[0];
+
+  const top = candidates.slice(0, Math.min(topN, candidates.length));
+
+  // Normalize scores to ensure positive values for probability calculation
+  const minScore = Math.min(...top.map((c) => c.score));
+  const adjustedScores = top.map((c) => c.score - minScore + 0.1); // Add 0.1 to avoid zero weights
+  const totalScore = adjustedScores.reduce((sum, s) => sum + s, 0);
+
+  let random = Math.random() * totalScore;
+
+  for (let i = 0; i < top.length; i++) {
+    random -= adjustedScores[i];
+    if (random <= 0) return top[i];
+  }
+
+  return top[0];
 }
 
 /**
@@ -533,50 +562,53 @@ function generateSingleOutfit(
       );
     }
 
-    // Sort by taste alignment, seasonal fit, undertone compatibility, and height silhouette
-    filtered.sort((a, b) => {
-      const tasteA = scoreTasteAlignment(a.embedding as number[] | null, tasteVector);
-      const tasteB = scoreTasteAlignment(b.embedding as number[] | null, tasteVector);
-      const seasonA = a.seasonal_score;
-      const seasonB = b.seasonal_score;
-      // Add undertone boost if user has skin undertone set
-      const undertoneA = userContext?.skinUndertone
-        ? getUndertoneColorBoost(a.colors?.primary || "", userContext.skinUndertone as SkinUndertone)
-        : 0;
-      const undertoneB = userContext?.skinUndertone
-        ? getUndertoneColorBoost(b.colors?.primary || "", userContext.skinUndertone as SkinUndertone)
-        : 0;
-      // Add height silhouette boost if user has height set
-      const heightA = userContext?.heightCategory
-        ? getHeightSilhouetteBoost(userContext.heightCategory as HeightCategory, {
-            fit: a.fit,
-            length: a.length,
-            category: a.category,
-            subcategory: a.subcategory,
-          })
-        : 0;
-      const heightB = userContext?.heightCategory
-        ? getHeightSilhouetteBoost(userContext.heightCategory as HeightCategory, {
-            fit: b.fit,
-            length: b.length,
-            category: b.category,
-            subcategory: b.subcategory,
-          })
-        : 0;
-      // Combined score: taste 45%, season 30%, undertone 13%, height 12%
-      const scoreA = tasteA * 0.45 + seasonA * 0.30 + (undertoneA + 0.15) * 0.13 + (heightA + 0.15) * 0.12;
-      const scoreB = tasteB * 0.45 + seasonB * 0.30 + (undertoneB + 0.15) * 0.13 + (heightB + 0.15) * 0.12;
-      return scoreB - scoreA;
-    });
-
     if (filtered.length === 0) {
       // Required slot not fillable
       console.log(`[OutfitGen] No suitable item for slot: ${slot}`);
       return null;
     }
 
-    // Pick top candidate
-    const selected = filtered[0];
+    // Calculate scores for each candidate (with cooldown penalty for recently worn items)
+    const scored = filtered.map((item) => {
+      const taste = scoreTasteAlignment(item.embedding as number[] | null, tasteVector);
+      const season = item.seasonal_score;
+
+      const undertone = userContext?.skinUndertone
+        ? getUndertoneColorBoost(item.colors?.primary || "", userContext.skinUndertone as SkinUndertone)
+        : 0;
+
+      const height = userContext?.heightCategory
+        ? getHeightSilhouetteBoost(userContext.heightCategory as HeightCategory, {
+            fit: item.fit,
+            length: item.length,
+            category: item.category,
+            subcategory: item.subcategory,
+          })
+        : 0;
+
+      // Base score: taste 45%, season 30%, undertone 13%, height 12%
+      let score = taste * 0.45 + season * 0.30 + (undertone + 0.15) * 0.13 + (height + 0.15) * 0.12;
+
+      // Cooldown penalty: 70% reduction if worn in last 3 days
+      const lastWorn = (item as unknown as { last_worn_at?: string }).last_worn_at
+        ? new Date((item as unknown as { last_worn_at: string }).last_worn_at)
+        : null;
+      const daysSinceWorn = lastWorn
+        ? Math.floor((Date.now() - lastWorn.getTime()) / (1000 * 60 * 60 * 24))
+        : Infinity;
+
+      if (daysSinceWorn < 3) {
+        score *= 0.3; // 70% penalty
+      }
+
+      return { ...item, score };
+    });
+
+    // Sort by score (descending)
+    scored.sort((a, b) => b.score - a.score);
+
+    // Weighted random selection from top 5 for variety
+    const selected = weightedRandomPick(scored, 5);
     selectedItems.push(selected);
     if (selected.colors) {
       usedColors.push(selected.colors as ColorInfo);
@@ -591,13 +623,33 @@ function generateSingleOutfit(
     );
 
     if (outerwearCandidates.length > 0) {
-      const filtered = filterByColorCompatibility(
+      const colorFiltered = filterByColorCompatibility(
         outerwearCandidates.map((item) => ({ ...item, colors: item.colors as ColorInfo })),
         usedColors
       );
 
-      if (filtered.length > 0) {
-        const outerwearItem = filtered[0] as unknown as WardrobeItem & ScoredItem;
+      if (colorFiltered.length > 0) {
+        // Score outerwear candidates with cooldown penalty
+        const scoredOuterwear = colorFiltered.map((item) => {
+          let score = scoreTasteAlignment((item as unknown as { embedding?: number[] }).embedding ?? null, tasteVector);
+
+          // Cooldown penalty: 70% reduction if worn in last 3 days
+          const lastWorn = (item as unknown as { last_worn_at?: string }).last_worn_at
+            ? new Date((item as unknown as { last_worn_at: string }).last_worn_at)
+            : null;
+          const daysSinceWorn = lastWorn
+            ? Math.floor((Date.now() - lastWorn.getTime()) / (1000 * 60 * 60 * 24))
+            : Infinity;
+
+          if (daysSinceWorn < 3) {
+            score *= 0.3; // 70% penalty
+          }
+
+          return { ...item, score };
+        });
+
+        scoredOuterwear.sort((a, b) => b.score - a.score);
+        const outerwearItem = weightedRandomPick(scoredOuterwear, 3) as unknown as WardrobeItem;
         selectedItems.push(outerwearItem);
         excludeIds.add(outerwearItem.id);
       }
