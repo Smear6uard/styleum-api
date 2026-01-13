@@ -179,12 +179,12 @@ outfits.get("/", async (c) => {
 
   console.log(`[Outfits] Date range: ${today.toISOString()} to ${tomorrow.toISOString()}`);
 
-  // Only get pre-generated outfits from TODAY
+  // Get pre-generated outfits OR first_outfit_auto from TODAY
   const { data: preGenerated, error } = await supabaseAdmin
     .from("generated_outfits")
     .select("*")
     .eq("user_id", userId)
-    .eq("is_pre_generated", true)
+    .or("is_pre_generated.eq.true,source.eq.first_outfit_auto")
     .gte("generated_at", today.toISOString())
     .lt("generated_at", tomorrow.toISOString())
     .order("generated_at", { ascending: false })
@@ -255,11 +255,15 @@ outfits.get("/", async (c) => {
     }
   }
 
+  // Determine source - use first_outfit_auto if any outfit has that source (for iOS celebration)
+  const hasFirstOutfit = preGenerated.some((o) => o.source === "first_outfit_auto");
+  const source = hasFirstOutfit ? "first_outfit_auto" : "pre_generated";
+
   return c.json({
     outfits: transformedOutfits,
     count: transformedOutfits.length,
     weather,
-    source: "pre_generated",
+    source,
   });
 });
 
@@ -719,6 +723,157 @@ outfits.post("/:id/reject", async (c) => {
     .eq("id", outfitId);
 
   return c.json({ success: true });
+});
+
+/**
+ * POST /:id/share - Track outfit share, award XP (once per outfit)
+ */
+outfits.post("/:id/share", async (c) => {
+  const userId = getUserId(c);
+  const outfitId = c.req.param("id");
+
+  try {
+    // 1. Verify outfit exists and belongs to user
+    const { data: outfit, error: outfitError } = await supabaseAdmin
+      .from("generated_outfits")
+      .select("id, user_id, short_id")
+      .eq("id", outfitId)
+      .single();
+
+    if (outfitError || !outfit) {
+      return c.json({ error: "Outfit not found" }, 404);
+    }
+
+    if (outfit.user_id !== userId) {
+      return c.json({ error: "Not your outfit" }, 403);
+    }
+
+    // 2. Check if already shared (prevent XP farming)
+    const { data: existingShare } = await supabaseAdmin
+      .from("outfit_shares")
+      .select("id")
+      .eq("outfit_id", outfitId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (existingShare) {
+      // Already shared - return success but no new XP
+      const { data: stats } = await supabaseAdmin
+        .from("user_gamification")
+        .select("total_outfits_shared")
+        .eq("user_id", userId)
+        .single();
+
+      return c.json({
+        success: true,
+        xp_awarded: 0,
+        total_shares: stats?.total_outfits_shared || 0,
+        achievement_unlocked: null,
+        share_url: `https://styleum.xyz/o/${outfit.short_id}`,
+        message: "Already shared this outfit",
+      });
+    }
+
+    // 3. Get platform from request body (optional)
+    const body = await c.req.json().catch(() => ({}));
+    const platform = body.platform || "other";
+
+    // 4. Record the share
+    await supabaseAdmin.from("outfit_shares").insert({
+      outfit_id: outfitId,
+      user_id: userId,
+      platform: platform,
+      shared_at: new Date().toISOString(),
+    });
+
+    // 5. Award XP (15 for sharing)
+    await GamificationService.awardXP(
+      userId,
+      XP_AMOUNTS.SHARE_OUTFIT,
+      "share_outfit",
+      outfitId,
+      `Shared outfit`
+    );
+
+    // 6. Increment total_outfits_shared
+    await GamificationService.incrementStat(userId, "total_outfits_shared", 1);
+
+    // 7. Get updated share count
+    const { data: stats } = await supabaseAdmin
+      .from("user_gamification")
+      .select("total_outfits_shared")
+      .eq("user_id", userId)
+      .single();
+
+    const totalShares = stats?.total_outfits_shared || 1;
+
+    // 8. Check for share achievements
+    let unlockedAchievement: {
+      id: string;
+      name: string;
+      xp_reward: number;
+    } | null = null;
+
+    const shareAchievements = [
+      { threshold: 1, id: "social_butterfly", name: "Social Butterfly", xp: 50 },
+      { threshold: 10, id: "influencer", name: "Influencer", xp: 100 },
+      { threshold: 25, id: "style_ambassador", name: "Style Ambassador", xp: 250 },
+    ];
+
+    for (const achievement of shareAchievements) {
+      if (totalShares === achievement.threshold) {
+        // Check if not already unlocked
+        const { data: existing } = await supabaseAdmin
+          .from("user_achievements")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("achievement_id", achievement.id)
+          .maybeSingle();
+
+        if (!existing) {
+          // Unlock achievement
+          await supabaseAdmin.from("user_achievements").insert({
+            user_id: userId,
+            achievement_id: achievement.id,
+            unlocked_at: new Date().toISOString(),
+          });
+
+          // Award achievement XP bonus
+          await GamificationService.awardXP(
+            userId,
+            achievement.xp,
+            "achievement",
+            undefined,
+            `Unlocked: ${achievement.name}`
+          );
+
+          unlockedAchievement = {
+            id: achievement.id,
+            name: achievement.name,
+            xp_reward: achievement.xp,
+          };
+
+          console.log(`[Share] User ${userId} unlocked ${achievement.name}`);
+          break;
+        }
+      }
+    }
+
+    console.log(
+      `[Share] User ${userId} shared outfit ${outfitId}, total: ${totalShares}`
+    );
+
+    return c.json({
+      success: true,
+      xp_awarded: XP_AMOUNTS.SHARE_OUTFIT,
+      total_shares: totalShares,
+      achievement_unlocked: unlockedAchievement,
+      share_url: `https://styleum.xyz/o/${outfit.short_id}`,
+    });
+  } catch (error) {
+    console.error("[Share] Error:", error);
+    return c.json({ error: "Failed to track share" }, 500);
+  }
 });
 
 /**

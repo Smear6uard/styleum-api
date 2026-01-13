@@ -14,6 +14,7 @@ import {
   XP_AMOUNTS,
 } from "../services/gamification.js";
 import { ReferralService } from "../services/referrals.js";
+import { checkAndGenerateFirstOutfit } from "../services/firstOutfit.js";
 
 type Variables = {
   userId: string;
@@ -106,7 +107,8 @@ function mapItemToResponse(row: Record<string, unknown>) {
  */
 async function processItemInBackground(
   itemId: string,
-  imageUrl: string
+  imageUrl: string,
+  userId: string
 ): Promise<void> {
   try {
     console.log(`[AI] Processing item ${itemId}`);
@@ -156,6 +158,14 @@ async function processItemInBackground(
     }
 
     console.log(`[AI] Item ${itemId} processing completed`);
+
+    // Check if this completes the wardrobe for first outfit generation
+    try {
+      await checkAndGenerateFirstOutfit(userId);
+    } catch (firstOutfitError) {
+      console.error("[AI] First outfit check failed:", firstOutfitError);
+      // Don't fail item processing if first outfit check fails
+    }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : "Unknown error";
     console.error(`[AI] Error processing item ${itemId}:`, errorMessage);
@@ -346,7 +356,7 @@ items.post("/", itemUploadLimit, async (c) => {
   }
 
   // Trigger background processing (non-blocking)
-  processItemInBackground(data.id, image_url).catch((err) => {
+  processItemInBackground(data.id, image_url, userId).catch((err) => {
     console.error(`[AI] Background processing failed for ${data.id}:`, err);
   });
 
@@ -458,7 +468,7 @@ items.post("/batch", itemUploadLimit, async (c) => {
 
   // Trigger background processing for each item (non-blocking)
   for (const item of data) {
-    processItemInBackground(item.id, item.original_image_url).catch((err) => {
+    processItemInBackground(item.id, item.original_image_url, userId).catch((err) => {
       console.error(`[AI] Background processing failed for ${item.id}:`, err);
     });
   }

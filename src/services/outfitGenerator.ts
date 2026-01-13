@@ -15,8 +15,20 @@ import {
 import {
   calculateOutfitColorHarmony,
   filterByColorCompatibility,
+  calculateOutfitUndertoneBoost,
+  getUndertoneColorBoost,
   type ColorInfo,
+  type SkinUndertone,
 } from "./colorHarmony.js";
+import {
+  generatePersonalizedStylingTip,
+  type UserContext,
+} from "./ai/stylingTips.js";
+import {
+  getHeightSilhouetteBoost,
+  calculateOutfitHeightBoost,
+  type HeightCategory,
+} from "./heightScoring.js";
 
 // Category slots for outfit generation
 const OUTFIT_SLOTS = ["top", "bottom", "footwear"] as const;
@@ -124,6 +136,8 @@ export interface WardrobeItem {
   processed_image_url?: string | null;
   original_image_url?: string | null;
   item_name?: string | null;
+  fit?: "oversized" | "relaxed" | "regular" | "fitted" | "slim" | null;
+  length?: "cropped" | "regular" | "longline" | null;
 }
 
 export interface GeneratedOutfit {
@@ -226,7 +240,7 @@ async function getUserWardrobe(userId: string): Promise<WardrobeItem[]> {
   const { data, error } = await supabaseAdmin
     .from("wardrobe_items")
     .select(
-      "id, category, subcategory, embedding, colors, formality_score, seasons, occasions, style_vibes, processed_image_url, original_image_url, item_name"
+      "id, category, subcategory, embedding, colors, formality_score, seasons, occasions, style_vibes, processed_image_url, original_image_url, item_name, fit, length"
     )
     .eq("user_id", userId)
     .eq("is_archived", false)
@@ -471,7 +485,8 @@ function generateSingleOutfit(
   tasteVector: number[] | null,
   weather: WeatherData,
   occasion: string | undefined,
-  excludeIds: Set<string>
+  excludeIds: Set<string>,
+  userContext?: UserContext
 ): GeneratedOutfit | null {
   const selectedItems: WardrobeItem[] = [];
   const usedColors: ColorInfo[] = [];
@@ -518,14 +533,40 @@ function generateSingleOutfit(
       );
     }
 
-    // Sort by taste alignment and seasonal fit
+    // Sort by taste alignment, seasonal fit, undertone compatibility, and height silhouette
     filtered.sort((a, b) => {
       const tasteA = scoreTasteAlignment(a.embedding as number[] | null, tasteVector);
       const tasteB = scoreTasteAlignment(b.embedding as number[] | null, tasteVector);
       const seasonA = a.seasonal_score;
       const seasonB = b.seasonal_score;
-      // Combined score
-      return tasteB * 0.6 + seasonB * 0.4 - (tasteA * 0.6 + seasonA * 0.4);
+      // Add undertone boost if user has skin undertone set
+      const undertoneA = userContext?.skinUndertone
+        ? getUndertoneColorBoost(a.colors?.primary || "", userContext.skinUndertone as SkinUndertone)
+        : 0;
+      const undertoneB = userContext?.skinUndertone
+        ? getUndertoneColorBoost(b.colors?.primary || "", userContext.skinUndertone as SkinUndertone)
+        : 0;
+      // Add height silhouette boost if user has height set
+      const heightA = userContext?.heightCategory
+        ? getHeightSilhouetteBoost(userContext.heightCategory as HeightCategory, {
+            fit: a.fit,
+            length: a.length,
+            category: a.category,
+            subcategory: a.subcategory,
+          })
+        : 0;
+      const heightB = userContext?.heightCategory
+        ? getHeightSilhouetteBoost(userContext.heightCategory as HeightCategory, {
+            fit: b.fit,
+            length: b.length,
+            category: b.category,
+            subcategory: b.subcategory,
+          })
+        : 0;
+      // Combined score: taste 45%, season 30%, undertone 13%, height 12%
+      const scoreA = tasteA * 0.45 + seasonA * 0.30 + (undertoneA + 0.15) * 0.13 + (heightA + 0.15) * 0.12;
+      const scoreB = tasteB * 0.45 + seasonB * 0.30 + (undertoneB + 0.15) * 0.13 + (heightB + 0.15) * 0.12;
+      return scoreB - scoreA;
     });
 
     if (filtered.length === 0) {
@@ -581,9 +622,26 @@ function generateSingleOutfit(
 
   const occasionMatch = selectedItems.every((item) => matchesOccasion(item, occasion));
 
-  // Combined style score
+  // Calculate undertone boost for the whole outfit
+  const undertoneBoost = calculateOutfitUndertoneBoost(
+    selectedItems.map((item) => (item.colors || {}) as ColorInfo),
+    userContext?.skinUndertone as SkinUndertone | undefined
+  );
+
+  // Calculate height silhouette boost for the whole outfit
+  const heightBoost = calculateOutfitHeightBoost(
+    userContext?.heightCategory as HeightCategory | undefined,
+    selectedItems.map((item) => ({
+      fit: item.fit,
+      length: item.length,
+      category: item.category,
+      subcategory: item.subcategory,
+    }))
+  );
+
+  // Combined style score (undertone/height boosts add up to +/-0.15 each)
   const styleScore =
-    avgTasteScore * 0.4 + colorHarmonyScore * 0.3 + avgWeatherScore * 0.2 + (occasionMatch ? 0.1 : 0);
+    avgTasteScore * 0.35 + colorHarmonyScore * 0.25 + avgWeatherScore * 0.2 + (occasionMatch ? 0.1 : 0) + undertoneBoost + heightBoost;
 
   // Generate display properties
   const vibe = generateVibe(selectedItems, styleScore);
@@ -610,6 +668,27 @@ function generateSingleOutfit(
 }
 
 /**
+ * Fetch user profile for personalization context
+ */
+async function getUserContext(userId: string): Promise<UserContext> {
+  const { data: profile } = await supabaseAdmin
+    .from("user_profiles")
+    .select("height_category, skin_undertone, departments")
+    .eq("id", userId)
+    .single();
+
+  if (!profile) {
+    return {};
+  }
+
+  return {
+    heightCategory: profile.height_category as UserContext["heightCategory"],
+    skinUndertone: profile.skin_undertone as UserContext["skinUndertone"],
+    clothingStyle: profile.departments?.includes("menswear") ? "menswear" : "womenswear",
+  };
+}
+
+/**
  * Main outfit generation function
  */
 export async function generateOutfits(params: GenerationParams): Promise<GenerationResult> {
@@ -631,6 +710,14 @@ export async function generateOutfits(params: GenerationParams): Promise<Generat
   if (wardrobe.length < 3) {
     console.log("[OutfitGen] Not enough items in wardrobe");
     return { outfits: [], weather };
+  }
+
+  // Fetch user context for personalization (height, skin undertone, etc.)
+  const userContext = await getUserContext(userId);
+  if (userContext.heightCategory || userContext.skinUndertone) {
+    console.log(
+      `[OutfitGen] User context: height=${userContext.heightCategory || "unset"}, undertone=${userContext.skinUndertone || "unset"}, style=${userContext.clothingStyle}`
+    );
   }
 
   // Get taste vector
@@ -679,10 +766,27 @@ export async function generateOutfits(params: GenerationParams): Promise<Generat
       tasteVector,
       weather,
       occasion,
-      new Set(globalExclude)
+      new Set(globalExclude),
+      userContext
     );
 
     if (outfit) {
+      // Generate AI-powered personalized styling tip if user has context set
+      if (userContext.heightCategory || userContext.skinUndertone) {
+        try {
+          const personalizedTip = await generatePersonalizedStylingTip(
+            outfit.items,
+            userContext,
+            { temperature: weather.temperature, condition: weather.condition },
+            occasion
+          );
+          outfit.styling_tip = personalizedTip;
+        } catch (err) {
+          console.error("[OutfitGen] Failed to generate AI styling tip:", err);
+          // Keep the rule-based tip that was already generated
+        }
+      }
+
       outfits.push(outfit);
       // Add these items to global exclude for variety
       outfit.item_ids.forEach((id) => globalExclude.add(id));
@@ -748,9 +852,10 @@ export async function saveGeneratedOutfit(
   userId: string,
   outfit: GeneratedOutfit,
   occasion?: string,
-  weather?: WeatherData
+  weather?: WeatherData,
+  source?: string // Custom source like 'first_outfit_auto', 'pre_generated_4am', etc.
 ): Promise<string | null> {
-  console.log(`[OutfitGen] Saving outfit for user ${userId}, items: ${outfit.item_ids.join(", ")}`);
+  console.log(`[OutfitGen] Saving outfit for user ${userId}, items: ${outfit.item_ids.join(", ")}, source: ${source || "on_demand"}`);
 
   const insertData = {
     user_id: userId,
@@ -770,6 +875,7 @@ export async function saveGeneratedOutfit(
     weather_condition: weather?.condition,
     is_saved: false,
     expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours
+    source: source || "on_demand", // Default to on_demand if not specified
   };
 
   const { data, error } = await supabaseAdmin

@@ -287,6 +287,73 @@ export function getComplementaryColors(color: string): string[] {
   return [...new Set(suggestions)].slice(0, 5);
 }
 
+// Colors that complement different skin undertones
+const WARM_UNDERTONE_COLORS = new Set([
+  "brown", "dark brown", "camel", "tan", "beige", "cream", "ivory", "khaki",
+  "rust", "terracotta", "copper", "coral", "peach", "salmon", "orange",
+  "mustard", "gold", "olive", "olive green", "warm white", "red", "burgundy"
+]);
+
+const COOL_UNDERTONE_COLORS = new Set([
+  "navy", "navy blue", "royal blue", "cobalt", "blue", "sky blue", "light blue",
+  "teal", "turquoise", "aqua", "cyan", "purple", "violet", "lavender", "lilac",
+  "plum", "magenta", "pink", "hot pink", "white", "gray", "grey", "charcoal",
+  "burgundy", "wine", "forest green", "emerald", "mint"
+]);
+
+// Colors that work well for both undertones (neutrals essentially)
+const NEUTRAL_UNDERTONE_COLORS = new Set([
+  "black", "white", "gray", "grey", "charcoal", "navy", "navy blue",
+  "denim", "taupe", "jade", "soft pink", "dusty rose", "mauve"
+]);
+
+export type SkinUndertone = "warm" | "cool" | "neutral";
+
+/**
+ * Get a color boost/penalty score based on skin undertone compatibility
+ * Returns a value between -0.15 and +0.15 to adjust color harmony scoring
+ */
+export function getUndertoneColorBoost(color: string, undertone: SkinUndertone | null | undefined): number {
+  if (!undertone || !color) return 0;
+
+  const normalized = normalizeColor(color);
+
+  // Neutral undertones work with everything
+  if (undertone === "neutral") {
+    return NEUTRAL_UNDERTONE_COLORS.has(normalized) ? 0.05 : 0;
+  }
+
+  if (undertone === "warm") {
+    if (WARM_UNDERTONE_COLORS.has(normalized)) return 0.12;
+    if (COOL_UNDERTONE_COLORS.has(normalized)) return -0.08;
+    return 0;
+  }
+
+  if (undertone === "cool") {
+    if (COOL_UNDERTONE_COLORS.has(normalized)) return 0.12;
+    if (WARM_UNDERTONE_COLORS.has(normalized)) return -0.08;
+    return 0;
+  }
+
+  return 0;
+}
+
+/**
+ * Calculate aggregate undertone boost for an outfit's colors
+ */
+export function calculateOutfitUndertoneBoost(items: ColorInfo[], undertone: SkinUndertone | null | undefined): number {
+  if (!undertone) return 0;
+
+  const colors = items
+    .map((item) => item.primary)
+    .filter((c): c is string => !!c);
+
+  if (colors.length === 0) return 0;
+
+  const totalBoost = colors.reduce((sum, color) => sum + getUndertoneColorBoost(color, undertone), 0);
+  return totalBoost / colors.length;
+}
+
 /**
  * Filter items by color compatibility with existing items
  */

@@ -20,6 +20,8 @@ export interface ItemTags {
   style_vibes: string[];
   brand: string | null;
   gender: "male" | "female" | "unisex";
+  fit: "oversized" | "relaxed" | "regular" | "fitted" | "slim";
+  length: "cropped" | "regular" | "longline";
 }
 
 const PRIMARY_MODEL = "google/gemini-2.0-flash-001";
@@ -48,7 +50,9 @@ Output ONLY valid JSON with this exact schema:
   "formality_score": 1-10,
   "style_vibes": ["minimalist", "streetwear", "preppy", "bohemian", "classic", "edgy", "romantic", "sporty"],
   "brand": "string (if visible, else null)",
-  "gender": "male|female|unisex"
+  "gender": "male|female|unisex",
+  "fit": "oversized|relaxed|regular|fitted|slim",
+  "length": "cropped|regular|longline"
 }
 
 Rules:
@@ -60,6 +64,17 @@ Rules:
   - "male" for menswear items (men's suits, dress shirts, ties, men's shorts, etc.)
   - "female" for womenswear items (dresses, skirts, women's blouses, heels, etc.)
   - "unisex" for gender-neutral items (plain t-shirts, hoodies, jeans, sneakers, basic accessories)
+- fit classification (for tops, bottoms, outerwear):
+  - "oversized" for loose, boxy, very relaxed fits with extra volume
+  - "relaxed" for comfortable, slightly loose but not oversized
+  - "regular" for standard fit, not too tight or loose
+  - "fitted" for form-following, tailored fits
+  - "slim" for very close to body, tight fits
+- length classification (for tops, bottoms, outerwear):
+  - "cropped" for items that end above natural length (crop tops, cropped jackets, ankle pants)
+  - "regular" for standard length items
+  - "longline" for items longer than standard (longline tees, maxi skirts, full-length coats)
+- For shoes/accessories/bags/jewelry: use "regular" for both fit and length
 - Output ONLY the JSON object, no markdown, no explanation`;
 
 /**
@@ -101,6 +116,8 @@ function createDefaultTags(colors: string[]): ItemTags {
     style_vibes: ["casual"],
     brand: null,
     gender: "unisex",
+    fit: "regular",
+    length: "regular",
   };
 }
 

@@ -20,6 +20,7 @@ import accountRoutes from "./routes/account.js";
 import usersRoutes from "./routes/users.js";
 import referralsRoutes from "./routes/referrals.js";
 import debugRoutes from "./routes/debug.js";
+import publicRoutes from "./routes/public.js";
 import { preGenerateOutfits } from "./jobs/preGenerate.js";
 import { sendMorningNotifications } from "./jobs/sendMorningNotifications.js";
 import { dailyGamificationReset } from "./jobs/dailyGamificationReset.js";
@@ -171,6 +172,9 @@ app.get("/health", (c) => {
 
 // Webhook routes (no auth)
 app.route("/webhooks", webhooksRoutes);
+
+// Public routes (no auth) - for outfit sharing pages
+app.route("/api/public", publicRoutes);
 
 // Cron endpoint (protected by secret)
 app.get("/cron/pre-generate", async (c) => {

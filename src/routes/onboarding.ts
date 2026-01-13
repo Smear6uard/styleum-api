@@ -85,6 +85,8 @@ onboarding.get("/style-images", async (c) => {
  *   - first_name: string
  *   - departments: string[] (e.g., ["womenswear"] or ["menswear"])
  *   - body_shape: string | null
+ *   - height_category: string | null ("short" | "average" | "tall")
+ *   - skin_undertone: string | null ("warm" | "cool" | "neutral")
  *   - favorite_brands: string[]
  *   - liked_style_ids: string[] (UUIDs of liked style reference images)
  *   - disliked_style_ids: string[] (UUIDs of disliked style reference images)
@@ -109,6 +111,11 @@ onboarding.post("/complete", async (c) => {
     first_name,
     departments,
     body_shape,
+    height_category,
+    skin_undertone,
+    // iOS naming support
+    heightCategory,
+    skinUndertone,
     favorite_brands,
     liked_style_ids,
     disliked_style_ids,
@@ -117,6 +124,10 @@ onboarding.post("/complete", async (c) => {
     liked_image_ids,
     disliked_image_ids,
   } = body;
+
+  // Support both snake_case and camelCase for iOS compatibility
+  const effectiveHeightCategory = height_category ?? heightCategory;
+  const effectiveSkinUndertone = skin_undertone ?? skinUndertone;
 
   // Use new field names or fall back to legacy
   const likedIds = liked_style_ids || liked_image_ids || [];
@@ -156,6 +167,15 @@ onboarding.post("/complete", async (c) => {
     }
     if (referral_source) {
       profileUpdate.referral_source = referral_source;
+    }
+    // Height and skin undertone - validate before saving
+    const validHeights = ["short", "average", "tall"];
+    const validUndertones = ["warm", "cool", "neutral"];
+    if (effectiveHeightCategory && validHeights.includes(effectiveHeightCategory)) {
+      profileUpdate.height_category = effectiveHeightCategory;
+    }
+    if (effectiveSkinUndertone && validUndertones.includes(effectiveSkinUndertone)) {
+      profileUpdate.skin_undertone = effectiveSkinUndertone;
     }
 
     await supabaseAdmin

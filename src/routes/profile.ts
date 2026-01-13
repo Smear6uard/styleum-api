@@ -52,6 +52,11 @@ async function handleProfileUpdate(c: Context<{ Variables: Variables }>) {
     push_enabled,
     morning_notification_time,
     timezone,
+    // Height and skin undertone - support both snake_case and camelCase
+    height_category,
+    heightCategory,
+    skin_undertone,
+    skinUndertone,
   } = body;
 
   // Build updates object with only provided fields
@@ -68,6 +73,23 @@ async function handleProfileUpdate(c: Context<{ Variables: Variables }>) {
   if (morning_notification_time !== undefined)
     updates.morning_notification_time = morning_notification_time;
   if (timezone !== undefined) updates.timezone = timezone;
+
+  // Height and skin undertone - validate and save
+  const validHeights = ["short", "average", "tall"];
+  const validUndertones = ["warm", "cool", "neutral"];
+  const effectiveHeight = height_category ?? heightCategory;
+  const effectiveUndertone = skin_undertone ?? skinUndertone;
+
+  if (effectiveHeight !== undefined) {
+    if (effectiveHeight === null || validHeights.includes(effectiveHeight)) {
+      updates.height_category = effectiveHeight;
+    }
+  }
+  if (effectiveUndertone !== undefined) {
+    if (effectiveUndertone === null || validUndertones.includes(effectiveUndertone)) {
+      updates.skin_undertone = effectiveUndertone;
+    }
+  }
 
   if (Object.keys(updates).length === 0) {
     return c.json({ error: "No fields to update" }, 400);

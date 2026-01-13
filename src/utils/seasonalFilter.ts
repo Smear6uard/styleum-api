@@ -60,12 +60,15 @@ export interface WardrobeItem {
   seasons?: string[] | null;
   formality_score?: number | null;
   category?: string | null;
+  subcategory?: string | null;
   embedding?: number[] | null;
   colors?: {
     primary?: string | null;
     secondary?: string[] | null;
     accent?: string | null;
   } | null;
+  fit?: "oversized" | "relaxed" | "regular" | "fitted" | "slim" | null;
+  length?: "cropped" | "regular" | "longline" | null;
 }
 
 export interface ScoredItem extends WardrobeItem {
