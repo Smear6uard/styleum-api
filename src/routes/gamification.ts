@@ -27,9 +27,6 @@ gamification.get("/stats", async (c) => {
     return c.json({ error: "Failed to fetch gamification stats" }, 500);
   }
 
-  // Check if user has engaged today (daily_xp > 0)
-  const hasEngagedToday = stats.daily_xp_earned > 0;
-
   // Check if streak was frozen today by querying daily_activity
   const today = new Date().toISOString().split("T")[0];
   const { data: todayActivity } = await (await import("../services/supabase.js")).supabaseAdmin
@@ -41,13 +38,48 @@ gamification.get("/stats", async (c) => {
 
   const streakFrozenToday = todayActivity?.freeze_used ?? false;
 
-  // Calculate hours until streak loss (midnight + some grace period, typically 4am local)
-  // Assuming UTC, streak resets at 4am UTC next day
-  const now = new Date();
-  const resetTime = new Date(now);
-  resetTime.setUTCDate(resetTime.getUTCDate() + 1);
-  resetTime.setUTCHours(4, 0, 0, 0);
-  const hoursUntilStreakLoss = Math.max(0, Math.round((resetTime.getTime() - now.getTime()) / (1000 * 60 * 60)));
+  // Calculate hours until streak loss using user's timezone
+  const hasEngagedToday = stats.daily_xp_earned > 0;
+  const userTimezone = stats.timezone || "America/Chicago";
+
+  // Helper to get hours until midnight in user's timezone
+  function getHoursUntilStreakLoss(timezone: string, engaged: boolean): number {
+    if (engaged) {
+      // User engaged today, they're safe - show hours until tomorrow's deadline
+      const now = new Date();
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
+      const parts = formatter.formatToParts(now);
+      const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "0");
+      // Hours until end of tomorrow (they have until tomorrow midnight)
+      return 24 + (24 - hour);
+    }
+
+    // User hasn't engaged today - calculate hours until midnight in their timezone
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(now);
+    const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "0");
+    const minute = parseInt(parts.find((p) => p.type === "minute")?.value || "0");
+
+    // Hours until midnight (24:00) in user's timezone
+    const hoursLeft = 23 - hour + (minute > 0 ? 0 : 1);
+    return Math.max(0, hoursLeft);
+  }
+
+  const hoursUntilStreakLoss = getHoursUntilStreakLoss(userTimezone, hasEngagedToday);
 
   // Return flat structure that iOS expects
   return c.json({

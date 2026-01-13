@@ -125,19 +125,47 @@ export async function dailyGamificationReset(): Promise<ResetResult> {
 }
 
 /**
+ * Get yesterday's date string (YYYY-MM-DD) in a specific timezone
+ */
+function getYesterdayInTimezone(timezone: string): string {
+  const now = new Date();
+  // Get current date parts in user's timezone
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const todayStr = formatter.format(now); // YYYY-MM-DD format
+  const today = new Date(todayStr + "T00:00:00");
+  today.setDate(today.getDate() - 1);
+  return today.toISOString().split("T")[0];
+}
+
+/**
+ * Get today's date string (YYYY-MM-DD) in a specific timezone
+ */
+function getTodayInTimezone(timezone: string): string {
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return formatter.format(now); // YYYY-MM-DD format
+}
+
+/**
  * Handle users who missed yesterday's activity
  * Apply auto-freeze if available, otherwise break streak
+ * Uses each user's timezone for accurate date comparisons
  */
 async function handleMissedStreaks(result: ResetResult): Promise<void> {
-  const yesterday = new Date();
-  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-  yesterday.setUTCHours(0, 0, 0, 0);
-  const yesterdayStr = yesterday.toISOString().split("T")[0];
-
-  // Find users with active streaks who didn't maintain it yesterday
+  // Find users with active streaks - include timezone for per-user date calculation
   const { data: usersWithStreaks, error: streakError } = await supabaseAdmin
     .from("user_gamification")
-    .select("user_id, current_streak, streak_freezes_available, last_active_date")
+    .select("user_id, current_streak, streak_freezes_available, last_active_date, timezone")
     .gt("current_streak", 0);
 
   if (streakError) {
@@ -147,19 +175,28 @@ async function handleMissedStreaks(result: ResetResult): Promise<void> {
   }
 
   for (const user of usersWithStreaks || []) {
-    // Check if user already maintained streak yesterday
-    if (user.last_active_date === yesterdayStr) {
-      continue; // Already active yesterday, streak is fine
+    const userTimezone = user.timezone || "America/Chicago";
+    const yesterdayStr = getYesterdayInTimezone(userTimezone);
+    const todayStr = getTodayInTimezone(userTimezone);
+
+    // Skip if user was active today (in their timezone) - streak is safe
+    if (user.last_active_date === todayStr) {
+      continue;
     }
 
-    // User missed yesterday - check if we can auto-freeze
+    // Skip if user was active yesterday (in their timezone) - streak is safe
+    if (user.last_active_date === yesterdayStr) {
+      continue;
+    }
+
+    // User missed yesterday in their timezone - check if we can auto-freeze
     if (user.streak_freezes_available > 0) {
       // Apply auto-freeze
       const { error: freezeError } = await supabaseAdmin
         .from("user_gamification")
         .update({
           streak_freezes_available: user.streak_freezes_available - 1,
-          last_active_date: yesterdayStr, // Pretend they were active
+          last_active_date: yesterdayStr, // Pretend they were active yesterday
         })
         .eq("user_id", user.user_id);
 
@@ -167,7 +204,7 @@ async function handleMissedStreaks(result: ResetResult): Promise<void> {
         result.errors.push(`Auto-freeze error for ${user.user_id}: ${freezeError.message}`);
       } else {
         result.auto_freezes_applied++;
-        console.log(`[DailyReset] Applied auto-freeze for user ${user.user_id}`);
+        console.log(`[DailyReset] Applied auto-freeze for user ${user.user_id} (tz: ${userTimezone})`);
 
         // Log to daily_activity
         await supabaseAdmin.from("daily_activity").upsert({
@@ -182,6 +219,7 @@ async function handleMissedStreaks(result: ResetResult): Promise<void> {
       const { error: breakError } = await supabaseAdmin
         .from("user_gamification")
         .update({
+          streak_before_loss: user.current_streak, // Save streak value before wiping
           current_streak: 0,
           streak_lost_at: new Date().toISOString(),
         })
@@ -191,7 +229,7 @@ async function handleMissedStreaks(result: ResetResult): Promise<void> {
         result.errors.push(`Streak break error for ${user.user_id}: ${breakError.message}`);
       } else {
         result.streaks_broken++;
-        console.log(`[DailyReset] Streak broken for user ${user.user_id} (was ${user.current_streak} days)`);
+        console.log(`[DailyReset] Streak broken for user ${user.user_id} (was ${user.current_streak} days, tz: ${userTimezone})`);
       }
     }
   }

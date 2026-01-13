@@ -93,6 +93,7 @@ export interface GamificationStats {
   total_items_added: number;
   total_outfits_generated: number;
   is_pro: boolean;
+  timezone: string; // User's timezone for streak calculations
 }
 
 export interface ChallengeProgress {
@@ -397,8 +398,8 @@ export class GamificationService {
         };
       }
 
-      // Get the streak value before it was lost
-      const previousStreak = gamification.longest_streak;
+      // Get the streak value before it was lost (use streak_before_loss, not longest_streak)
+      const previousStreak = gamification.streak_before_loss || gamification.longest_streak || 1;
 
       // Restore streak and deduct XP
       const { error: updateError } = await supabaseAdmin
@@ -552,6 +553,7 @@ export class GamificationService {
       total_outfits_generated:
         (gamification.total_outfits_generated as number) || 0,
       is_pro: isPro,
+      timezone: (gamification.timezone as string) || "America/Chicago",
     };
   }
 
