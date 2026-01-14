@@ -1,31 +1,8 @@
 import { Hono } from "hono";
 import { supabaseAdmin } from "../services/supabase.js";
-import { createHmac, timingSafeEqual } from "crypto";
 import { GRACE_PERIOD_DAYS } from "../constants/tiers.js";
 
 const webhooks = new Hono();
-
-// RevenueCat webhook signature verification
-function verifyRevenueCatSignature(
-  payload: string,
-  signature: string | undefined,
-  secret: string
-): boolean {
-  if (!signature) return false;
-
-  const expectedSignature = createHmac("sha256", secret)
-    .update(payload)
-    .digest("hex");
-
-  try {
-    return timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expectedSignature)
-    );
-  } catch {
-    return false;
-  }
-}
 
 // POST /revenuecat - Handle subscription events
 webhooks.post("/revenuecat", async (c) => {
@@ -36,17 +13,16 @@ webhooks.post("/revenuecat", async (c) => {
     return c.json({ error: "Webhook not configured" }, 500);
   }
 
-  // Get raw body for signature verification
-  const rawBody = await c.req.text();
-  const signature = c.req.header("X-RevenueCat-Signature");
+  // Verify Authorization header
+  const authHeader = c.req.header("Authorization");
+  const expectedAuth = `Bearer ${webhookSecret}`;
 
-  // Verify signature
-  if (!verifyRevenueCatSignature(rawBody, signature, webhookSecret)) {
-    console.warn("Invalid RevenueCat webhook signature");
-    return c.json({ error: "Invalid signature" }, 401);
+  if (!authHeader || authHeader !== expectedAuth) {
+    console.warn("Invalid RevenueCat webhook authorization");
+    return c.json({ error: "Unauthorized" }, 401);
   }
 
-  const event = JSON.parse(rawBody);
+  const event = await c.req.json();
   const { type, app_user_id, expiration_at_ms } = event.event ?? event;
 
   if (!app_user_id) {
