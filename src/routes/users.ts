@@ -4,6 +4,7 @@ import {
   isUserPro,
   getUser,
   getUserGamification,
+  supabaseAdmin,
 } from "../services/supabase.js";
 import {
   checkItemLimit,
@@ -123,6 +124,27 @@ users.get("/tier", async (c) => {
       tier_onboarding_seen_at: profile?.tier_onboarding_seen_at ?? null,
     },
   });
+});
+
+/**
+ * POST /tier-onboarding-seen - Mark tier onboarding as seen
+ * Alias for /api/profile/tier-onboarding-seen (iOS compatibility)
+ */
+users.post("/tier-onboarding-seen", async (c) => {
+  const userId = getUserId(c);
+  const now = new Date().toISOString();
+
+  const { error } = await supabaseAdmin
+    .from("user_profiles")
+    .update({ tier_onboarding_seen_at: now })
+    .eq("id", userId);
+
+  if (error) {
+    console.error("[Users] Failed to mark tier onboarding as seen:", error);
+    return c.json({ error: "Failed to update profile" }, 500);
+  }
+
+  return c.json({ success: true, tier_onboarding_seen_at: now });
 });
 
 function getNextMonthStart(): string {
