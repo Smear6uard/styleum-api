@@ -37,19 +37,60 @@ export async function initializeTasteVector(
     .select("embedding")
     .in("id", likedImageIds);
 
+  console.log(`[Taste] Query returned ${likedData?.length ?? 0} liked rows`);
+  if (likedData?.length) {
+    console.log(
+      `[Taste] First embedding type: ${typeof likedData[0].embedding}`
+    );
+    console.log(
+      `[Taste] First embedding sample: ${JSON.stringify(likedData[0].embedding)?.slice(0, 100)}`
+    );
+  }
+
   // Get embeddings for disliked images
   const { data: dislikedData } = await supabaseAdmin
     .from("style_reference_images")
     .select("embedding")
     .in("id", dislikedImageIds);
 
+  console.log(`[Taste] Query returned ${dislikedData?.length ?? 0} disliked rows`);
+
+  // Parse embeddings - Supabase returns halfvec as string "[0.1,0.2,...]"
+  const parseEmbedding = (e: { embedding: unknown }): number[] | null => {
+    if (!e.embedding) return null;
+
+    // If already an array, use it
+    if (Array.isArray(e.embedding)) {
+      return e.embedding as number[];
+    }
+
+    // If string (halfvec format), parse it
+    if (typeof e.embedding === "string") {
+      try {
+        const parsed = JSON.parse(e.embedding);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {
+        console.error(
+          "[Taste] Failed to parse embedding string:",
+          e.embedding.slice(0, 50)
+        );
+      }
+    }
+
+    return null;
+  };
+
   const likedEmbeddings = (likedData || [])
-    .map((e) => e.embedding as number[] | null)
-    .filter((e): e is number[] => e !== null);
+    .map(parseEmbedding)
+    .filter((e): e is number[] => e !== null && e.length === VECTOR_DIM);
 
   const dislikedEmbeddings = (dislikedData || [])
-    .map((e) => e.embedding as number[] | null)
-    .filter((e): e is number[] => e !== null);
+    .map(parseEmbedding)
+    .filter((e): e is number[] => e !== null && e.length === VECTOR_DIM);
+
+  console.log(
+    `[Taste] Parsed ${likedEmbeddings.length} liked embeddings, ${dislikedEmbeddings.length} disliked embeddings`
+  );
 
   // Calculate positive direction (average of likes)
   const positive = averageVectors(likedEmbeddings);
@@ -62,6 +103,16 @@ export async function initializeTasteVector(
 
   // Normalize to unit vector
   const normalized = normalizeVector(tasteVector);
+
+  // Validate vector contains no NaN/null values
+  const hasInvalidValues = normalized.some((v) => !Number.isFinite(v));
+  if (hasInvalidValues) {
+    console.error("[Taste] Vector contains invalid values!");
+    console.error("[Taste] Sample:", normalized.slice(0, 10));
+    console.error("[Taste] likedImageIds:", likedImageIds);
+    console.error("[Taste] dislikedImageIds:", dislikedImageIds);
+    throw new Error("Generated taste vector contains invalid values");
+  }
 
   // Store in database
   const now = new Date().toISOString();
