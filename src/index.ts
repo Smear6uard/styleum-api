@@ -139,8 +139,23 @@ function initializeCronJobs() {
 
         const resetCount = data?.length ?? 0;
         console.log(`[Cron] Monthly credit reset completed: ${resetCount} users`);
+
+        // Monthly streak freeze replenishment: Add +1 freeze to users below their tier max
+        console.log("[Cron] Starting monthly streak freeze replenishment...");
+
+        const { data: freezeResult, error: freezeError } = await supabaseAdmin.rpc(
+          "replenish_monthly_freezes"
+        );
+
+        if (freezeError) {
+          console.error("[Cron] Freeze replenishment failed:", freezeError.message);
+        } else {
+          console.log(
+            `[Cron] Monthly freeze replenishment completed: ${freezeResult?.free_users_updated ?? 0} free users, ${freezeResult?.pro_users_updated ?? 0} pro users`
+          );
+        }
       } catch (error) {
-        console.error("[Cron] Monthly credit reset failed:", error);
+        console.error("[Cron] Monthly reset failed:", error);
       }
     },
     { timezone: "UTC" }
@@ -151,7 +166,7 @@ function initializeCronJobs() {
   console.log("  - Deliver outfits: Every hour");
   console.log("  - Streak at risk: Every hour (targets 6 PM local)");
   console.log("  - Gamification reset: 10:00 AM UTC daily");
-  console.log("  - Monthly credit reset: 1st of month at midnight UTC");
+  console.log("  - Monthly reset (credits + freezes): 1st of month at midnight UTC");
 }
 
 type Variables = {
@@ -371,17 +386,31 @@ app.get("/cron/reset-credits", async (c) => {
     const resetCount = data?.length ?? 0;
     console.log(`[Cron] Reset credits for ${resetCount} free tier users`);
 
+    // Also replenish streak freezes
+    const { data: freezeResult, error: freezeError } = await supabaseAdmin.rpc(
+      "replenish_monthly_freezes"
+    );
+
+    if (freezeError) {
+      console.error("[Cron] Freeze replenishment failed:", freezeError.message);
+    } else {
+      console.log(
+        `[Cron] Freeze replenishment: ${freezeResult?.free_users_updated ?? 0} free, ${freezeResult?.pro_users_updated ?? 0} pro`
+      );
+    }
+
     return c.json({
       success: true,
-      message: "Monthly credit reset completed",
-      usersReset: resetCount,
+      message: "Monthly reset completed",
+      creditsReset: resetCount,
+      freezesReplenished: freezeResult ?? { free_users_updated: 0, pro_users_updated: 0 },
     });
   } catch (error) {
-    console.error("[Cron] Credit reset failed:", error);
+    console.error("[Cron] Monthly reset failed:", error);
     return c.json(
       {
         success: false,
-        error: "Credit reset failed",
+        error: "Monthly reset failed",
         message: error instanceof Error ? error.message : "Unknown error",
       },
       500
