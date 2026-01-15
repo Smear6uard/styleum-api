@@ -25,6 +25,7 @@ import { preGenerateOutfits } from "./jobs/preGenerate.js";
 import { sendMorningNotifications } from "./jobs/sendMorningNotifications.js";
 import { dailyGamificationReset } from "./jobs/dailyGamificationReset.js";
 import { deliverOutfits } from "./jobs/deliverOutfits.js";
+import { sendStreakAtRiskNotifications } from "./jobs/streakAtRisk.js";
 import { supabaseAdmin } from "./services/supabase.js";
 
 const CRON_SECRET = process.env.CRON_SECRET;
@@ -33,6 +34,17 @@ const CRON_SECRET = process.env.CRON_SECRET;
 if (!CRON_SECRET || CRON_SECRET.length < 32) {
   console.error("FATAL: CRON_SECRET must be set and at least 32 characters");
   process.exit(1);
+}
+
+// Check APNs configuration at startup
+const apnsVars = ["APNS_KEY_ID", "APNS_TEAM_ID", "APNS_BUNDLE_ID", "APNS_KEY"];
+const missingApnsVars = apnsVars.filter((v) => !process.env[v]);
+if (missingApnsVars.length > 0) {
+  console.warn(
+    `⚠️ [APNs] Missing environment variables: ${missingApnsVars.join(", ")} - Push notifications will not work!`
+  );
+} else {
+  console.log("✅ [APNs] All environment variables configured");
 }
 
 /**
@@ -69,6 +81,21 @@ function initializeCronJobs() {
         console.log(`[Cron] Outfit delivery completed: ${result.delivered} delivered, ${result.failed} failed`);
       } catch (error) {
         console.error("[Cron] Outfit delivery failed:", error);
+      }
+    },
+    { timezone: "UTC" }
+  );
+
+  // Streak at risk notifications hourly (targets 6 PM local time)
+  cron.schedule(
+    "0 * * * *",
+    async () => {
+      console.log("[Cron] Starting streak at risk notifications...");
+      try {
+        const result = await sendStreakAtRiskNotifications();
+        console.log(`[Cron] Streak at risk completed: ${result.notified} notified, ${result.failed} failed`);
+      } catch (error) {
+        console.error("[Cron] Streak at risk notifications failed:", error);
       }
     },
     { timezone: "UTC" }
@@ -122,6 +149,7 @@ function initializeCronJobs() {
   console.log("[Cron] All cron jobs initialized:");
   console.log("  - Pre-generate outfits: 9:30 AM UTC daily");
   console.log("  - Deliver outfits: Every hour");
+  console.log("  - Streak at risk: Every hour (targets 6 PM local)");
   console.log("  - Gamification reset: 10:00 AM UTC daily");
   console.log("  - Monthly credit reset: 1st of month at midnight UTC");
 }
@@ -281,6 +309,34 @@ app.get("/cron/deliver-outfits", async (c) => {
       {
         success: false,
         error: "Outfit delivery failed",
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
+      500
+    );
+  }
+});
+
+// Hourly streak at risk cron endpoint (targets 6 PM local time)
+app.get("/cron/streak-at-risk", async (c) => {
+  const authHeader = c.req.header("authorization");
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  console.log("[Cron] Starting streak at risk notifications via HTTP trigger");
+
+  try {
+    const result = await sendStreakAtRiskNotifications();
+    return c.json({
+      message: "Streak at risk notifications completed",
+      ...result,
+    });
+  } catch (error) {
+    console.error("[Cron] Streak at risk failed:", error);
+    return c.json(
+      {
+        success: false,
+        error: "Streak at risk failed",
         message: error instanceof Error ? error.message : "Unknown error",
       },
       500

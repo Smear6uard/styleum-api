@@ -5,6 +5,7 @@
  */
 
 import { supabaseAdmin, isUserPro } from "./supabase.js";
+import { sendPushNotification, isAPNsConfigured } from "./apns.js";
 
 // XP amounts for different actions
 export const XP_AMOUNTS = {
@@ -1138,6 +1139,38 @@ export class GamificationService {
               unlocked_at: new Date().toISOString(),
               is_seen: false,
             });
+          }
+        }
+      }
+
+      // Send push notifications for newly unlocked achievements
+      if (newAchievements.length > 0 && isAPNsConfigured()) {
+        // Get user's push settings
+        const { data: profile } = await supabaseAdmin
+          .from("user_profiles")
+          .select("push_token, push_enabled")
+          .eq("id", userId)
+          .single();
+
+        if (profile?.push_enabled && profile?.push_token) {
+          for (const achievement of newAchievements) {
+            try {
+              await sendPushNotification(profile.push_token, {
+                title: "🏆 Achievement Unlocked!",
+                body: achievement.name,
+                data: {
+                  type: "badge_unlock",
+                  screen: "achieve",
+                  badge_id: achievement.id,
+                },
+              });
+              console.log(
+                `[Gamification] Sent badge unlock push for ${achievement.id}`
+              );
+            } catch (pushError) {
+              // Don't break achievement flow if push fails
+              console.error(`[Gamification] Badge push failed:`, pushError);
+            }
           }
         }
       }

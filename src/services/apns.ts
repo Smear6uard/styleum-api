@@ -4,6 +4,7 @@
  */
 
 import { SignJWT, importPKCS8 } from "jose";
+import { supabaseAdmin } from "./supabase.js";
 
 interface PushPayload {
   title: string;
@@ -78,8 +79,21 @@ export async function sendPushNotification(
 
       // Handle specific APNs errors
       if (response.status === 410) {
-        // Device token is no longer valid - should remove from DB
-        console.log(`[APNs] Token expired/invalid, should be removed`);
+        console.warn(
+          `[APNs] Device token is no longer valid: ${deviceToken.substring(0, 8)}...`
+        );
+        // Clean up invalid token from database
+        try {
+          await supabaseAdmin
+            .from("user_profiles")
+            .update({ push_token: null, push_enabled: false })
+            .eq("push_token", deviceToken);
+          console.log(
+            `[APNs] Cleaned up invalid token: ${deviceToken.substring(0, 8)}...`
+          );
+        } catch (cleanupError) {
+          console.error(`[APNs] Failed to cleanup invalid token:`, cleanupError);
+        }
       }
 
       return false;
