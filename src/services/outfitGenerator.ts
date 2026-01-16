@@ -3,6 +3,7 @@
  * Core logic for generating personalized outfit recommendations
  */
 
+import * as Sentry from "@sentry/node";
 import { supabaseAdmin } from "./supabase.js";
 import { getTasteVector, cosineSimilarity, updateTasteVector } from "./tasteVector.js";
 import { getWeatherByCoords, getDefaultWeather, type WeatherData } from "./weather.js";
@@ -835,6 +836,9 @@ export async function generateOutfits(params: GenerationParams): Promise<Generat
           outfit.styling_tip = personalizedTip;
         } catch (err) {
           console.error("[OutfitGen] Failed to generate AI styling tip:", err);
+          Sentry.captureException(err, {
+            extra: { userId, context: "AI styling tip generation" },
+          });
           // Keep the rule-based tip that was already generated
         }
       }

@@ -1,3 +1,5 @@
+import * as Sentry from "@sentry/node";
+
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
 if (!OPENROUTER_API_KEY) {
@@ -219,5 +221,9 @@ Remember: Output ONLY valid JSON, no other text.`;
 
   // All models failed - return default tags
   console.error("[AI] All tagging models failed, using defaults");
+  Sentry.captureMessage("All tagging models failed, using defaults", {
+    level: "warning",
+    extra: { caption, colors },
+  });
   return createDefaultTags(colors);
 }

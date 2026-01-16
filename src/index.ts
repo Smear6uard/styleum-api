@@ -1,3 +1,13 @@
+import * as Sentry from "@sentry/node";
+
+// Initialize Sentry before other imports
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV || "development",
+  tracesSampleRate: 0.1,
+  enabled: !!process.env.SENTRY_DSN,
+});
+
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { logger } from "hono/logger";
@@ -488,6 +498,15 @@ app.notFound((c) => {
 
 // Error handler
 app.onError((err, c) => {
+  const userId = c.get("userId");
+
+  Sentry.withScope((scope) => {
+    if (userId) scope.setUser({ id: userId });
+    scope.setExtra("path", c.req.path);
+    scope.setExtra("method", c.req.method);
+    Sentry.captureException(err);
+  });
+
   console.error("Unhandled error:", err);
   return c.json(
     {

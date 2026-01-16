@@ -15,6 +15,7 @@
   "license": "ISC",
   "dependencies": {
     "@hono/node-server": "^1.19.7",
+    "@sentry/node": "^10.34.0",
     "@supabase/supabase-js": "^2.89.0",
     "dotenv": "^17.2.3",
     "hono": "^4.11.3",

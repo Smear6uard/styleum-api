@@ -1,3 +1,5 @@
+import * as Sentry from "@sentry/node";
+
 const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY;
 
 if (!RUNPOD_API_KEY) {
@@ -80,6 +82,10 @@ export async function callRunPod<T = unknown>(
   ) {
     // Check timeout
     if (Date.now() - startTime > opts.timeoutMs) {
+      Sentry.captureMessage(`RunPod timeout: ${endpointId}`, {
+        level: "error",
+        extra: { jobId: result.id, timeoutMs: opts.timeoutMs },
+      });
       throw new Error(`RunPod job timed out after ${opts.timeoutMs}ms`);
     }
 
@@ -119,6 +125,10 @@ export async function callRunPod<T = unknown>(
   }
 
   if (result.status === "FAILED") {
+    Sentry.captureMessage(`RunPod job failed: ${endpointId}`, {
+      level: "error",
+      extra: { jobId: result.id, error: result.error },
+    });
     throw new Error(`RunPod job failed: ${result.error ?? "Unknown error"}`);
   }
 

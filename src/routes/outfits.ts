@@ -4,6 +4,7 @@ import {
   checkDailyOutfitLimit,
   getHistoryDayLimit,
 } from "../utils/limits.js";
+import { addBreadcrumb } from "../utils/sentry.js";
 import { getUserId } from "../middleware/auth.js";
 import {
   styleMeLimitMiddleware,
@@ -393,6 +394,7 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
   const effectiveMood = isPro ? mood : undefined;
 
   console.log(`[Outfits] Generate request - lat: ${lat}, lon: ${lon}, occasion: ${occasion}`);
+  addBreadcrumb("outfit", "Outfit generation started", { userId, occasion, lat, lon });
 
   // Generate outfits using AI-powered generator
   const { outfits: generatedOutfits, weather } = await generateOutfits({
@@ -405,6 +407,7 @@ outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
   });
 
   console.log(`[Outfits] Weather: ${weather.temperature}C (${celsiusToFahrenheit(weather.temperature)}F), ${weather.condition}`);
+  addBreadcrumb("outfit", "Outfit generation completed", { count: generatedOutfits.length });
 
   if (generatedOutfits.length === 0) {
     return c.json(

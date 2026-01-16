@@ -1,6 +1,8 @@
 import { Hono } from "hono";
+import * as Sentry from "@sentry/node";
 import { supabaseAdmin } from "../services/supabase.js";
 import { GRACE_PERIOD_DAYS } from "../constants/tiers.js";
+import { addBreadcrumb } from "../utils/sentry.js";
 
 const webhooks = new Hono();
 
@@ -30,6 +32,7 @@ webhooks.post("/revenuecat", async (c) => {
   }
 
   console.log(`RevenueCat webhook: ${type} for user ${app_user_id}`);
+  addBreadcrumb("subscription", `Webhook received: ${type}`, { userId: app_user_id });
 
   switch (type) {
     case "INITIAL_PURCHASE":
@@ -62,6 +65,9 @@ webhooks.post("/revenuecat", async (c) => {
 
       if (error) {
         console.error("Failed to update subscription:", error);
+        Sentry.captureException(error, {
+          extra: { event: type, userId: app_user_id },
+        });
         return c.json({ error: "Database error" }, 500);
       }
 
@@ -95,6 +101,9 @@ webhooks.post("/revenuecat", async (c) => {
 
       if (error) {
         console.error("Failed to update subscription:", error);
+        Sentry.captureException(error, {
+          extra: { event: type, userId: app_user_id },
+        });
         return c.json({ error: "Database error" }, 500);
       }
 
@@ -115,6 +124,9 @@ webhooks.post("/revenuecat", async (c) => {
 
       if (error) {
         console.error("Failed to update billing issue status:", error);
+        Sentry.captureException(error, {
+          extra: { event: type, userId: app_user_id },
+        });
         return c.json({ error: "Database error" }, 500);
       }
 
