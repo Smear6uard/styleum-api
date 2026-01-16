@@ -22,6 +22,7 @@ publicRoutes.get("/outfits/:id", async (c) => {
       .select(`
         id,
         short_id,
+        user_id,
         outfit_name,
         vibe,
         reasoning,
@@ -53,6 +54,18 @@ publicRoutes.get("/outfits/:id", async (c) => {
       );
     }
 
+    // Increment view count (fire-and-forget, don't block response)
+    void supabaseAdmin
+      .rpc("increment_outfit_view_count", { p_outfit_id: outfit.id })
+      .then(() => {}, () => {}); // Ignore errors silently
+
+    // Fetch user's first name for "styled by" attribution
+    const { data: userProfile } = await supabaseAdmin
+      .from("user_profiles")
+      .select("first_name")
+      .eq("id", outfit.user_id)
+      .single();
+
     // Fetch items - PUBLIC INFO ONLY (no user data, no private fields)
     const { data: items } = await supabaseAdmin
       .from("wardrobe_items")
@@ -83,6 +96,7 @@ publicRoutes.get("/outfits/:id", async (c) => {
           }
         : null,
       generated_at: outfit.generated_at,
+      styled_by: userProfile?.first_name || null,
     };
 
     const publicItems = (items || []).map((item) => ({
