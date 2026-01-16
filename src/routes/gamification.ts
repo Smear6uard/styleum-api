@@ -561,6 +561,142 @@ gamification.post("/restore-streak", async (c) => {
 });
 
 /**
+ * POST /repair-streak - Repair a broken streak (available to ALL users)
+ * Costs 500 XP, must be used within 24 hours of streak breaking
+ */
+gamification.post("/repair-streak", async (c) => {
+  const userId = getUserId(c);
+
+  const result = await GamificationService.repairStreak(userId);
+
+  if (!result.success) {
+    return c.json({ error: result.error }, 400);
+  }
+
+  return c.json({
+    success: true,
+    xp_spent: result.xp_spent,
+    restored_streak: result.restored_streak,
+    new_xp_total: result.new_xp_total,
+  });
+});
+
+/**
+ * POST /confirm-day - Evening confirmation endpoint
+ * Called when user responds to evening push notification
+ * Body: { response: "yes" | "something_else" | "skip" }
+ *
+ * - "yes" → User wore an outfit, maintain streak + award 10 XP
+ * - "something_else" → User wore something (not from app), maintain streak + award 5 XP
+ * - "skip" → User didn't wear anything styled, no action taken
+ */
+gamification.post("/confirm-day", async (c) => {
+  const userId = getUserId(c);
+
+  let body: { response?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    body = {};
+  }
+
+  const { response } = body;
+
+  // Validate response
+  if (!response || !["yes", "something_else", "skip"].includes(response)) {
+    return c.json(
+      { error: "Invalid response. Must be: yes, something_else, or skip" },
+      400
+    );
+  }
+
+  // Handle skip - no action needed
+  if (response === "skip") {
+    return c.json({
+      success: true,
+      message: "Skipped confirmation",
+      streak_maintained: false,
+      xp_awarded: 0,
+    });
+  }
+
+  // Import supabase for direct queries
+  const { supabaseAdmin } = await import("../services/supabase.js");
+
+  // Check if user already confirmed today
+  const { data: gamification, error: fetchError } = await supabaseAdmin
+    .from("user_gamification")
+    .select("current_streak, last_streak_activity_date")
+    .eq("user_id", userId)
+    .single();
+
+  if (fetchError && fetchError.code !== "PGRST116") {
+    console.error("[Gamification] Error fetching user data:", fetchError);
+    return c.json({ error: "Failed to fetch user data" }, 500);
+  }
+
+  const today = new Date().toISOString().split("T")[0];
+
+  // Already confirmed today
+  if (gamification?.last_streak_activity_date === today) {
+    return c.json({
+      success: true,
+      message: "Already confirmed today",
+      streak_maintained: true,
+      xp_awarded: 0,
+      current_streak: gamification.current_streak,
+    });
+  }
+
+  // Determine XP amount based on response
+  // "yes" = wore an app outfit = 10 XP (same as wear_outfit)
+  // "something_else" = wore something styled = 5 XP (partial credit)
+  const xpAmount = response === "yes" ? 10 : 5;
+  const xpSource = response === "yes" ? "evening_confirmation" : "evening_confirmation_alt";
+
+  // Maintain streak using the existing service
+  const streakResult = await GamificationService.maintainStreak(userId);
+
+  if (!streakResult.success) {
+    console.error("[Gamification] Failed to maintain streak:", streakResult.error);
+    return c.json({ error: "Failed to maintain streak" }, 500);
+  }
+
+  // Award XP
+  const xpResult = await GamificationService.awardXP(
+    userId,
+    xpAmount,
+    xpSource as import("../services/gamification.js").XPSource,
+    undefined,
+    response === "yes" ? "Evening confirmation - wore outfit" : "Evening confirmation - wore something else"
+  );
+
+  // Update daily activity record
+  await supabaseAdmin
+    .from("daily_activity")
+    .upsert(
+      {
+        user_id: userId,
+        activity_date: today,
+        streak_maintained: true,
+        xp_earned: xpAmount,
+      },
+      { onConflict: "user_id,activity_date" }
+    );
+
+  return c.json({
+    success: true,
+    message: response === "yes" ? "Streak maintained!" : "Thanks for checking in!",
+    streak_maintained: true,
+    xp_awarded: xpAmount,
+    current_streak: streakResult.current_streak,
+    new_total_xp: xpResult.new_total_xp,
+    level_up: xpResult.level_up,
+    new_level: xpResult.new_level,
+  });
+});
+
+/**
  * GET /activity/calendar - Get activity calendar for a month
  * Query params: year (YYYY), month (1-12)
  */

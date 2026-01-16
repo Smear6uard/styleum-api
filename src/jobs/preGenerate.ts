@@ -14,6 +14,7 @@ interface PreGenerateResult {
   errors: number;
   skipped: number;
   errorDetails: string[];
+  failedUserIds: string[];
   duration_ms: number;
 }
 
@@ -43,6 +44,7 @@ export async function preGenerateOutfits(): Promise<PreGenerateResult> {
     errors: 0,
     skipped: 0,
     errorDetails: [],
+    failedUserIds: [],
     duration_ms: 0,
   };
 
@@ -76,17 +78,24 @@ export async function preGenerateOutfits(): Promise<PreGenerateResult> {
       const batchResults = await Promise.allSettled(batch.map((user) => processUser(user)));
 
       // Tally results
-      for (const settledResult of batchResults) {
+      for (let i = 0; i < batchResults.length; i++) {
+        const settledResult = batchResults[i];
         if (settledResult.status === "fulfilled") {
           if (settledResult.value.success) {
             result.usersProcessed++;
             result.outfitsGenerated += settledResult.value.outfitCount;
           } else {
             result.errors++;
+            result.failedUserIds.push(settledResult.value.userId);
             result.errorDetails.push(settledResult.value.error || "Unknown error");
           }
         } else {
           result.errors++;
+          // Get userId from the batch for rejected promises
+          const failedUser = batch[i];
+          if (failedUser) {
+            result.failedUserIds.push(failedUser.id);
+          }
           result.errorDetails.push(settledResult.reason?.message || "Promise rejected");
         }
       }
@@ -103,6 +112,9 @@ export async function preGenerateOutfits(): Promise<PreGenerateResult> {
     console.log(`[PreGen] Outfits generated: ${result.outfitsGenerated}`);
     console.log(`[PreGen] Errors: ${result.errors}`);
     console.log(`[PreGen] Skipped: ${result.skipped}`);
+    if (result.failedUserIds.length > 0) {
+      console.log(`[PreGen] Failed user IDs: ${result.failedUserIds.join(", ")}`);
+    }
     console.log("[PreGen] ====================================");
   } catch (error) {
     result.success = false;
@@ -171,6 +183,7 @@ async function filterEligibleUsers(users: ActiveUser[]): Promise<ActiveUser[]> {
 
 interface ProcessUserResult {
   success: boolean;
+  userId: string;
   outfitCount: number;
   error?: string;
 }
@@ -197,7 +210,7 @@ async function processUser(user: ActiveUser): Promise<ProcessUserResult> {
 
     if (!outfits || outfits.length === 0) {
       console.log(`[PreGen] No outfits generated for user ${userId}`);
-      return { success: false, outfitCount: 0, error: "No outfits generated" };
+      return { success: false, userId, outfitCount: 0, error: "No outfits generated" };
     }
 
     // Step 3: Save outfits and collect IDs
@@ -216,11 +229,11 @@ async function processUser(user: ActiveUser): Promise<ProcessUserResult> {
 
     console.log(`[PreGen] User ${userId}: ${outfitIds.length} outfits generated`);
 
-    return { success: true, outfitCount: outfitIds.length };
+    return { success: true, userId, outfitCount: outfitIds.length };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : "Unknown error";
     console.error(`[PreGen] User ${userId} failed:`, errorMsg);
-    return { success: false, outfitCount: 0, error: `User ${userId}: ${errorMsg}` };
+    return { success: false, userId, outfitCount: 0, error: `User ${userId}: ${errorMsg}` };
   }
 }
 

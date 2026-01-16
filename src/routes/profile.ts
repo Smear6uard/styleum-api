@@ -57,6 +57,11 @@ async function handleProfileUpdate(c: Context<{ Variables: Variables }>) {
     heightCategory,
     skin_undertone,
     skinUndertone,
+    // Evening confirmation preferences
+    evening_confirmation_enabled,
+    eveningConfirmationEnabled,
+    evening_confirmation_time,
+    eveningConfirmationTime,
   } = body;
 
   // Build updates object with only provided fields
@@ -88,6 +93,28 @@ async function handleProfileUpdate(c: Context<{ Variables: Variables }>) {
   if (effectiveUndertone !== undefined) {
     if (effectiveUndertone === null || validUndertones.includes(effectiveUndertone)) {
       updates.skin_undertone = effectiveUndertone;
+    }
+  }
+
+  // Evening confirmation preferences - support both naming conventions
+  const effectiveEveningEnabled = evening_confirmation_enabled ?? eveningConfirmationEnabled;
+  const effectiveEveningTime = evening_confirmation_time ?? eveningConfirmationTime;
+
+  if (effectiveEveningEnabled !== undefined) {
+    updates.evening_confirmation_enabled = effectiveEveningEnabled;
+  }
+  if (effectiveEveningTime !== undefined) {
+    // Validate time format (HH:MM or HH:MM:SS)
+    const timeRegex = /^([01]?[0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$/;
+    if (effectiveEveningTime === null || timeRegex.test(effectiveEveningTime)) {
+      // Normalize to HH:MM:SS format
+      let normalizedTime = effectiveEveningTime;
+      if (normalizedTime && !normalizedTime.includes(":")) {
+        normalizedTime = null;
+      } else if (normalizedTime && normalizedTime.split(":").length === 2) {
+        normalizedTime = `${normalizedTime}:00`;
+      }
+      updates.evening_confirmation_time = normalizedTime;
     }
   }
 

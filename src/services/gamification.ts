@@ -33,7 +33,9 @@ export type XPSource =
   | "daily_goal"
   | "challenge"
   | "achievement"
-  | "streak_restore";
+  | "streak_restore"
+  | "evening_confirmation"
+  | "evening_confirmation_alt";
 
 // Type definitions
 export interface XPAwardResult {
@@ -64,6 +66,14 @@ export interface RestoreResult {
   new_streak: number;
   xp_cost: number;
   new_total_xp: number;
+  error?: string;
+}
+
+export interface RepairResult {
+  success: boolean;
+  restored_streak: number;
+  xp_spent: number;
+  new_xp_total: number;
   error?: string;
 }
 
@@ -444,6 +454,131 @@ export class GamificationService {
         new_streak: 0,
         xp_cost: 0,
         new_total_xp: 0,
+        error: err instanceof Error ? err.message : "Unknown error",
+      };
+    }
+  }
+
+  /**
+   * Repair a lost streak (available to ALL users, costs 500 XP)
+   * Unlike restoreStreak which is Pro-only, this is available to everyone
+   */
+  static async repairStreak(userId: string): Promise<RepairResult> {
+    const XP_COST = 500;
+
+    try {
+      // Get current gamification state
+      const { data: gamification, error: fetchError } = await supabaseAdmin
+        .from("user_gamification")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+
+      if (fetchError || !gamification) {
+        return {
+          success: false,
+          restored_streak: 0,
+          xp_spent: 0,
+          new_xp_total: 0,
+          error: "User gamification not found",
+        };
+      }
+
+      // Check if there's a broken streak to repair
+      if (!gamification.streak_lost_at) {
+        return {
+          success: false,
+          restored_streak: 0,
+          xp_spent: 0,
+          new_xp_total: gamification.total_xp,
+          error: "No broken streak to repair",
+        };
+      }
+
+      // Check if streak was lost within 24 hours
+      const lostAt = new Date(gamification.streak_lost_at);
+      const hoursAgo = (Date.now() - lostAt.getTime()) / (1000 * 60 * 60);
+      if (hoursAgo > 24) {
+        return {
+          success: false,
+          restored_streak: 0,
+          xp_spent: 0,
+          new_xp_total: gamification.total_xp,
+          error: "Repair window expired",
+        };
+      }
+
+      // Check if already repaired this break (last_streak_repair_at >= streak_lost_at)
+      if (gamification.last_streak_repair_at) {
+        const lastRepairAt = new Date(gamification.last_streak_repair_at);
+        if (lastRepairAt >= lostAt) {
+          return {
+            success: false,
+            restored_streak: 0,
+            xp_spent: 0,
+            new_xp_total: gamification.total_xp,
+            error: "Already repaired",
+          };
+        }
+      }
+
+      // Check if user has enough XP
+      if (gamification.total_xp < XP_COST) {
+        return {
+          success: false,
+          restored_streak: 0,
+          xp_spent: 0,
+          new_xp_total: gamification.total_xp,
+          error: "Need 500 XP to repair",
+        };
+      }
+
+      // Get the streak value before it was lost
+      const previousStreak = gamification.streak_before_loss || 1;
+
+      // Repair streak: restore value, deduct XP, set last_streak_repair_at
+      const { error: updateError } = await supabaseAdmin
+        .from("user_gamification")
+        .update({
+          current_streak: previousStreak,
+          total_xp: gamification.total_xp - XP_COST,
+          streak_lost_at: null,
+          last_streak_repair_at: new Date().toISOString(),
+          last_streak_activity_date: new Date().toISOString().split("T")[0],
+        })
+        .eq("user_id", userId);
+
+      if (updateError) {
+        return {
+          success: false,
+          restored_streak: 0,
+          xp_spent: 0,
+          new_xp_total: gamification.total_xp,
+          error: updateError.message,
+        };
+      }
+
+      // Log the XP transaction
+      await supabaseAdmin.from("xp_transactions").insert({
+        user_id: userId,
+        amount: -XP_COST,
+        source: "streak_restore",
+        description: `Repaired ${previousStreak}-day streak`,
+      });
+
+      return {
+        success: true,
+        restored_streak: previousStreak,
+        xp_spent: XP_COST,
+        new_xp_total: gamification.total_xp - XP_COST,
+      };
+    } catch (err) {
+      console.error("[Gamification] Exception repairing streak:", err);
+      return {
+        success: false,
+        restored_streak: 0,
+        xp_spent: 0,
+        new_xp_total: 0,
         error: err instanceof Error ? err.message : "Unknown error",
       };
     }

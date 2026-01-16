@@ -26,6 +26,7 @@ import { sendMorningNotifications } from "./jobs/sendMorningNotifications.js";
 import { dailyGamificationReset } from "./jobs/dailyGamificationReset.js";
 import { deliverOutfits } from "./jobs/deliverOutfits.js";
 import { sendStreakAtRiskNotifications } from "./jobs/streakAtRisk.js";
+import { sendEveningConfirmations } from "./jobs/eveningConfirmation.js";
 import { supabaseAdmin } from "./services/supabase.js";
 
 const CRON_SECRET = process.env.CRON_SECRET;
@@ -101,6 +102,21 @@ function initializeCronJobs() {
     { timezone: "UTC" }
   );
 
+  // Evening confirmation notifications hourly (targets user's preferred evening time, default 8 PM)
+  cron.schedule(
+    "0 * * * *",
+    async () => {
+      console.log("[Cron] Starting evening confirmation notifications...");
+      try {
+        const result = await sendEveningConfirmations();
+        console.log(`[Cron] Evening confirmation completed: ${result.notified} notified, ${result.failed} failed`);
+      } catch (error) {
+        console.error("[Cron] Evening confirmation notifications failed:", error);
+      }
+    },
+    { timezone: "UTC" }
+  );
+
   // Daily gamification reset at 10:00 AM UTC (4:00 AM Chicago)
   cron.schedule(
     "0 10 * * *",
@@ -165,6 +181,7 @@ function initializeCronJobs() {
   console.log("  - Pre-generate outfits: 9:30 AM UTC daily");
   console.log("  - Deliver outfits: Every hour");
   console.log("  - Streak at risk: Every hour (targets 6 PM local)");
+  console.log("  - Evening confirmation: Every hour (targets user's preferred time, default 8 PM local)");
   console.log("  - Gamification reset: 10:00 AM UTC daily");
   console.log("  - Monthly reset (credits + freezes): 1st of month at midnight UTC");
 }
@@ -352,6 +369,34 @@ app.get("/cron/streak-at-risk", async (c) => {
       {
         success: false,
         error: "Streak at risk failed",
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
+      500
+    );
+  }
+});
+
+// Hourly evening confirmation cron endpoint (targets user's preferred time, default 8 PM local)
+app.get("/cron/evening-confirmation", async (c) => {
+  const authHeader = c.req.header("authorization");
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  console.log("[Cron] Starting evening confirmation notifications via HTTP trigger");
+
+  try {
+    const result = await sendEveningConfirmations();
+    return c.json({
+      message: "Evening confirmation notifications completed",
+      ...result,
+    });
+  } catch (error) {
+    console.error("[Cron] Evening confirmation failed:", error);
+    return c.json(
+      {
+        success: false,
+        error: "Evening confirmation failed",
         message: error instanceof Error ? error.message : "Unknown error",
       },
       500

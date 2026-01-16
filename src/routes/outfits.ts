@@ -98,6 +98,36 @@ function getItemRole(category: string | null | undefined, subcategory: string | 
 }
 
 /**
+ * Check if user has minimum items to generate outfits (top, bottom, footwear)
+ */
+async function checkUserCanGenerate(userId: string): Promise<boolean> {
+  const { data: items } = await supabaseAdmin
+    .from("wardrobe_items")
+    .select("category")
+    .eq("user_id", userId)
+    .eq("is_archived", false)
+    .eq("processing_status", "completed");
+
+  if (!items || items.length === 0) {
+    return false;
+  }
+
+  const categories = items.map((item) => (item.category || "").toLowerCase());
+
+  const hasTop = categories.some((c) =>
+    ["top", "tops", "t-shirt", "shirt", "blouse", "sweater", "hoodie", "polo", "tank", "henley"].includes(c)
+  );
+  const hasBottom = categories.some((c) =>
+    ["bottom", "bottoms", "pants", "jeans", "shorts", "skirt", "trousers", "chino", "jogger", "legging"].includes(c)
+  );
+  const hasShoes = categories.some((c) =>
+    ["shoes", "footwear", "sneakers", "boots", "sandals", "loafers", "heels", "flats", "oxfords"].includes(c)
+  );
+
+  return hasTop && hasBottom && hasShoes;
+}
+
+/**
  * Transform outfit to iOS-expected format
  */
 interface OutfitItem {
@@ -198,11 +228,59 @@ outfits.get("/", async (c) => {
   console.log(`[Outfits] Found ${preGenerated?.length || 0} pre-generated outfits for today`);
 
   if (!preGenerated || preGenerated.length === 0) {
+    console.log(`[Outfits] Serving fallback for user ${userId}`);
+
+    // Fetch random completed items as inspiration
+    const { data: inspirationItems } = await supabaseAdmin
+      .from("wardrobe_items")
+      .select("id, category, processed_image_url, original_image_url, item_name")
+      .eq("user_id", userId)
+      .eq("is_archived", false)
+      .eq("processing_status", "completed")
+      .limit(20);
+
+    // Shuffle and take 3-4
+    const shuffled = (inspirationItems || []).sort(() => Math.random() - 0.5);
+    const selected = shuffled.slice(0, Math.min(4, shuffled.length));
+
+    // Check if user can generate (has top + bottom + shoes)
+    const canGenerate = await checkUserCanGenerate(userId);
+
+    // Fetch weather if user has location
+    let weather = null;
+    const { data: profile } = await supabaseAdmin
+      .from("user_profiles")
+      .select("location_lat, location_lng")
+      .eq("id", userId)
+      .single();
+
+    if (profile?.location_lat && profile?.location_lng) {
+      const weatherData = await getWeatherByCoords(profile.location_lat, profile.location_lng);
+      if (weatherData) {
+        weather = {
+          temp_fahrenheit: celsiusToFahrenheit(weatherData.temperature),
+          condition: weatherData.condition,
+          humidity: weatherData.humidity,
+          wind_mph: Math.round(weatherData.wind_speed * 2.237),
+          description: weatherData.description,
+        };
+      }
+    }
+
     return c.json({
       outfits: [],
       count: 0,
-      weather: null,
-      source: "none",
+      weather,
+      source: "fallback",
+      fallback: true,
+      fallback_message: "Try something new from your closet today!",
+      inspiration_items: selected.map((item) => ({
+        id: item.id,
+        imageUrl: item.processed_image_url || item.original_image_url,
+        category: item.category,
+        itemName: item.item_name,
+      })),
+      can_generate: canGenerate,
     });
   }
 
