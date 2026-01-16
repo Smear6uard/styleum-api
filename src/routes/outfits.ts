@@ -277,9 +277,9 @@ outfits.get("/", async (c) => {
       fallback_message: "Try something new from your closet today!",
       inspiration_items: selected.map((item) => ({
         id: item.id,
-        imageUrl: item.processed_image_url || item.original_image_url,
+        image_url: item.processed_image_url || item.original_image_url || null,
         category: item.category,
-        itemName: item.item_name,
+        item_name: item.item_name ?? null,
       })),
       can_generate: canGenerate,
     });
