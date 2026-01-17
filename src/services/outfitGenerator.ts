@@ -21,10 +21,8 @@ import {
   type ColorInfo,
   type SkinUndertone,
 } from "./colorHarmony.js";
-import {
-  generatePersonalizedStylingTip,
-  type UserContext,
-} from "./ai/stylingTips.js";
+import { type UserContext } from "./ai/stylingTips.js";
+import { generateOutfitDescriptions } from "./ai/outfitDescriptions.js";
 import {
   getHeightSilhouetteBoost,
   calculateOutfitHeightBoost,
@@ -824,23 +822,23 @@ export async function generateOutfits(params: GenerationParams): Promise<Generat
     );
 
     if (outfit) {
-      // Generate AI-powered personalized styling tip if user has context set
-      if (userContext.heightCategory || userContext.skinUndertone) {
-        try {
-          const personalizedTip = await generatePersonalizedStylingTip(
-            outfit.items,
-            userContext,
-            { temperature: weather.temperature, condition: weather.condition },
-            occasion
-          );
-          outfit.styling_tip = personalizedTip;
-        } catch (err) {
-          console.error("[OutfitGen] Failed to generate AI styling tip:", err);
-          Sentry.captureException(err, {
-            extra: { userId, context: "AI styling tip generation" },
-          });
-          // Keep the rule-based tip that was already generated
-        }
+      // Generate AI-powered descriptions (whyItWorks, stylingTip, colorHarmony)
+      try {
+        const descriptions = await generateOutfitDescriptions(
+          outfit.items,
+          userContext,
+          { temperature: weather.temperature, condition: weather.condition },
+          occasion
+        );
+        outfit.reasoning = descriptions.whyItWorks;
+        outfit.styling_tip = descriptions.stylingTip;
+        outfit.color_harmony_description = descriptions.colorHarmony || undefined;
+      } catch (err) {
+        console.error("[OutfitGen] Failed to generate AI descriptions, using rule-based fallback:", err);
+        Sentry.captureException(err, {
+          extra: { userId, context: "AI outfit descriptions generation" },
+        });
+        // Keep the rule-based descriptions that were already generated
       }
 
       outfits.push(outfit);
@@ -909,11 +907,12 @@ export async function saveGeneratedOutfit(
   outfit: GeneratedOutfit,
   occasion?: string,
   weather?: WeatherData,
-  source?: string // Custom source like 'first_outfit_auto', 'pre_generated_4am', etc.
+  source?: string, // Custom source like 'first_outfit_auto', 'pre_generated_4am', etc.
+  targetDate?: string // "YYYY-MM-DD" format - which date this outfit is FOR
 ): Promise<string | null> {
-  console.log(`[OutfitGen] Saving outfit for user ${userId}, items: ${outfit.item_ids.join(", ")}, source: ${source || "on_demand"}`);
+  console.log(`[OutfitGen] Saving outfit for user ${userId}, items: ${outfit.item_ids.join(", ")}, source: ${source || "on_demand"}, targetDate: ${targetDate || "none"}`);
 
-  const insertData = {
+  const insertData: Record<string, unknown> = {
     user_id: userId,
     items: outfit.item_ids,
     occasion: occasion || null,
@@ -932,6 +931,7 @@ export async function saveGeneratedOutfit(
     is_saved: false,
     expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours
     source: source || "on_demand", // Default to on_demand if not specified
+    target_date: targetDate || null, // Which date this outfit is FOR
   };
 
   const { data, error } = await supabaseAdmin

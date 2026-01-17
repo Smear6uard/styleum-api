@@ -201,23 +201,42 @@ outfits.get("/", async (c) => {
 
   console.log(`[Outfits] GET - Fetching TODAY's outfits for user ${userId}`);
 
-  // Get today's date at midnight UTC
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  // Get user's timezone from profile
+  const { data: profile } = await supabaseAdmin
+    .from("user_profiles")
+    .select("timezone, location_lat, location_lng")
+    .eq("id", userId)
+    .single();
 
-  const tomorrow = new Date(today);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  // Calculate user's "today" in their timezone
+  let userToday: string;
+  if (profile?.timezone) {
+    try {
+      const now = new Date();
+      const formatter = new Intl.DateTimeFormat("en-CA", {
+        timeZone: profile.timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+      userToday = formatter.format(now); // "YYYY-MM-DD"
+    } catch {
+      // Invalid timezone, fall back to UTC
+      userToday = new Date().toISOString().split("T")[0];
+    }
+  } else {
+    userToday = new Date().toISOString().split("T")[0];
+  }
 
-  console.log(`[Outfits] Date range: ${today.toISOString()} to ${tomorrow.toISOString()}`);
+  console.log(`[Outfits] Looking for target_date = ${userToday}`);
 
-  // Get pre-generated outfits OR first_outfit_auto from TODAY
+  // Get pre-generated outfits OR first_outfit_auto for today's target_date
   const { data: preGenerated, error } = await supabaseAdmin
     .from("generated_outfits")
     .select("*")
     .eq("user_id", userId)
     .or("is_pre_generated.eq.true,source.eq.first_outfit_auto")
-    .gte("generated_at", today.toISOString())
-    .lt("generated_at", tomorrow.toISOString())
+    .eq("target_date", userToday)
     .order("generated_at", { ascending: false })
     .limit(4);
 
@@ -247,14 +266,8 @@ outfits.get("/", async (c) => {
     // Check if user can generate (has top + bottom + shoes)
     const canGenerate = await checkUserCanGenerate(userId);
 
-    // Fetch weather if user has location
+    // Fetch weather if user has location (use profile we already fetched)
     let weather = null;
-    const { data: profile } = await supabaseAdmin
-      .from("user_profiles")
-      .select("location_lat, location_lng")
-      .eq("id", userId)
-      .single();
-
     if (profile?.location_lat && profile?.location_lng) {
       const weatherData = await getWeatherByCoords(profile.location_lat, profile.location_lng);
       if (weatherData) {
@@ -313,14 +326,8 @@ outfits.get("/", async (c) => {
     })
   );
 
-  // Get weather if user has location
+  // Get weather if user has location (use profile we already fetched above)
   let weather = null;
-  const { data: profile } = await supabaseAdmin
-    .from("user_profiles")
-    .select("location_lat, location_lng")
-    .eq("id", userId)
-    .single();
-
   if (profile?.location_lat && profile?.location_lng) {
     const weatherData = await getWeatherByCoords(profile.location_lat, profile.location_lng);
     if (weatherData) {

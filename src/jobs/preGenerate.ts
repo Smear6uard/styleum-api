@@ -1,7 +1,8 @@
 /**
  * Pre-Generation Cron Job
  * Generates outfits in advance for active users to improve UX
- * Runs daily at 4 AM via Railway cron trigger
+ * Runs daily at 11 PM UTC (5 PM Chicago) via node-cron
+ * Generates outfits for the NEXT day (target_date = tomorrow)
  */
 
 import { supabaseAdmin } from "../services/supabase.js";
@@ -34,7 +35,7 @@ export async function preGenerateOutfits(): Promise<PreGenerateResult> {
   const startTime = Date.now();
 
   console.log("[PreGen] ====================================");
-  console.log("[PreGen] Starting 4AM outfit pre-generation");
+  console.log("[PreGen] Starting 11PM UTC outfit pre-generation");
   console.log("[PreGen] ====================================");
 
   const result: PreGenerateResult = {
@@ -194,11 +195,17 @@ async function processUser(user: ActiveUser): Promise<ProcessUserResult> {
   try {
     console.log(`[PreGen] Processing user ${userId}...`);
 
-    // Step 1: Clear OLD pre-generated outfits (from previous days)
+    // Calculate target_date as the NEXT day (what these outfits are FOR)
+    const tomorrow = new Date();
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    const targetDate = tomorrow.toISOString().split("T")[0]; // "YYYY-MM-DD"
+    console.log(`[PreGen] Target date: ${targetDate}`);
+
+    // Step 1: Clear OLD pre-generated outfits (from past target_dates)
     await clearOldPreGeneratedOutfits(userId);
 
-    // Step 2: Clear TODAY's pre-generated (in case of re-run)
-    await clearTodaysPreGeneratedOutfits(userId);
+    // Step 2: Clear tomorrow's pre-generated (in case of re-run)
+    await clearTomorrowsPreGeneratedOutfits(userId, targetDate);
 
     // Step 3: Generate new outfits
     const { outfits, weather } = await generateOutfits({
@@ -213,10 +220,10 @@ async function processUser(user: ActiveUser): Promise<ProcessUserResult> {
       return { success: false, userId, outfitCount: 0, error: "No outfits generated" };
     }
 
-    // Step 3: Save outfits and collect IDs
+    // Step 4: Save outfits with target_date and collect IDs
     const outfitIds: string[] = [];
     for (const outfit of outfits) {
-      const outfitId = await saveGeneratedOutfit(userId, outfit, undefined, weather);
+      const outfitId = await saveGeneratedOutfit(userId, outfit, undefined, weather, undefined, targetDate);
       if (outfitId) {
         outfitIds.push(outfitId);
       }
@@ -238,16 +245,16 @@ async function processUser(user: ActiveUser): Promise<ProcessUserResult> {
 }
 
 async function clearOldPreGeneratedOutfits(userId: string): Promise<void> {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
+  // Get today's date in YYYY-MM-DD format
+  const today = new Date().toISOString().split("T")[0];
 
-  // Delete any pre-generated outfits from BEFORE today
+  // Delete any pre-generated outfits with target_date before today
   const { error, count } = await supabaseAdmin
     .from("generated_outfits")
     .delete()
     .eq("user_id", userId)
     .eq("is_pre_generated", true)
-    .lt("generated_at", today.toISOString());
+    .lt("target_date", today);
 
   if (error) {
     console.warn(`[PreGen] Failed to clear old outfits for ${userId}:`, error);
@@ -256,19 +263,17 @@ async function clearOldPreGeneratedOutfits(userId: string): Promise<void> {
   }
 }
 
-async function clearTodaysPreGeneratedOutfits(userId: string): Promise<void> {
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-
+async function clearTomorrowsPreGeneratedOutfits(userId: string, targetDate: string): Promise<void> {
+  // Delete any pre-generated outfits for the target_date (in case of re-run)
   const { error } = await supabaseAdmin
     .from("generated_outfits")
     .delete()
     .eq("user_id", userId)
     .eq("is_pre_generated", true)
-    .gte("generated_at", today.toISOString());
+    .eq("target_date", targetDate);
 
   if (error) {
-    console.warn(`[PreGen] Failed to clear today's outfits for ${userId}:`, error);
+    console.warn(`[PreGen] Failed to clear tomorrow's outfits for ${userId}:`, error);
     // Non-fatal, continue anyway
   }
 }
