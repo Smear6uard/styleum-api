@@ -180,11 +180,16 @@ export async function generateOutfitDescriptions(
     { max_tokens: 500, temperature: 0.7 }
   );
 
+  console.log("[OutfitDescriptions] Raw AI response:", response);
+
   const parsed = parseJsonFromLLMResponse<{
     whyItWorks?: string;
     stylingTip?: string;
     colorHarmony?: string | null;
   }>(response);
+
+  console.log("[OutfitDescriptions] Parsed result:", JSON.stringify(parsed, null, 2));
+  console.log("[OutfitDescriptions] stylingTip value:", parsed.stylingTip);
 
   // Validate response
   if (!parsed.whyItWorks || typeof parsed.whyItWorks !== "string") {

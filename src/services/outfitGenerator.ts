@@ -830,11 +830,17 @@ export async function generateOutfits(params: GenerationParams): Promise<Generat
           { temperature: weather.temperature, condition: weather.condition },
           occasion
         );
+        console.log("[OutfitGen] descriptions.stylingTip from AI:", descriptions.stylingTip);
         outfit.reasoning = descriptions.whyItWorks;
         outfit.styling_tip = descriptions.stylingTip;
         outfit.color_harmony_description = descriptions.colorHarmony || undefined;
+        console.log("[OutfitGen] outfit.styling_tip after assignment:", outfit.styling_tip);
       } catch (err) {
-        console.error("[OutfitGen] Failed to generate AI descriptions, using rule-based fallback:", err);
+        console.error("[OutfitGen] AI descriptions FAILED, stylingTip will be rule-based:", {
+          error: err,
+          outfitName: outfit.name,
+          ruleBasedStylingTip: outfit.styling_tip,
+        });
         Sentry.captureException(err, {
           extra: { userId, context: "AI outfit descriptions generation" },
         });
@@ -911,6 +917,7 @@ export async function saveGeneratedOutfit(
   targetDate?: string // "YYYY-MM-DD" format - which date this outfit is FOR
 ): Promise<string | null> {
   console.log(`[OutfitGen] Saving outfit for user ${userId}, items: ${outfit.item_ids.join(", ")}, source: ${source || "on_demand"}, targetDate: ${targetDate || "none"}`);
+  console.log("[OutfitGen] Saving outfit with styling_tip:", outfit.styling_tip);
 
   const insertData: Record<string, unknown> = {
     user_id: userId,
@@ -937,7 +944,7 @@ export async function saveGeneratedOutfit(
   const { data, error } = await supabaseAdmin
     .from("generated_outfits")
     .insert(insertData)
-    .select("id")
+    .select("id, styling_tip")
     .single();
 
   if (error) {
@@ -946,6 +953,6 @@ export async function saveGeneratedOutfit(
     return null;
   }
 
-  console.log(`[OutfitGen] Saved outfit with ID: ${data.id}`);
+  console.log(`[OutfitGen] Saved outfit with ID: ${data.id}, styling_tip in DB response: ${data.styling_tip}`);
   return data.id;
 }

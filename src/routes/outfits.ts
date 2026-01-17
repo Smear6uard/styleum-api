@@ -159,7 +159,8 @@ function transformOutfitForIOS(
   items: OutfitItem[],
   outfitId: string
 ) {
-  return {
+  console.log("[OutfitsAPI] transformOutfitForIOS - input styling_tip:", outfit.styling_tip);
+  const result = {
     id: outfitId,
     wardrobeItemIds: outfit.item_ids,
     score: Math.round((outfit.style_score || 0.8) * 100),
@@ -184,6 +185,8 @@ function transformOutfitForIOS(
       };
     }),
   };
+  console.log("[OutfitsAPI] transformOutfitForIOS - output stylingTip:", result.stylingTip);
+  return result;
 }
 
 type Variables = {
@@ -246,6 +249,9 @@ outfits.get("/", async (c) => {
   }
 
   console.log(`[Outfits] Found ${preGenerated?.length || 0} pre-generated outfits for today`);
+  if (preGenerated && preGenerated.length > 0) {
+    console.log("[OutfitsAPI] Fetched outfit styling_tip values:", preGenerated.map(o => ({ id: o.id, styling_tip: o.styling_tip })));
+  }
 
   if (!preGenerated || preGenerated.length === 0) {
     console.log(`[Outfits] Serving fallback for user ${userId}`);
@@ -309,6 +315,7 @@ outfits.get("/", async (c) => {
         .in("id", outfit.items || []);
 
       // Map database outfit to GeneratedOutfitData format
+      console.log("[OutfitsAPI] Raw DB outfit.styling_tip:", outfit.styling_tip);
       const outfitData = {
         id: outfit.id,
         item_ids: outfit.items || [],
@@ -321,6 +328,7 @@ outfits.get("/", async (c) => {
         confidence_score: outfit.confidence_score || 0.8,
         occasion_match: false,
       };
+      console.log("[OutfitsAPI] outfitData.styling_tip after mapping:", outfitData.styling_tip);
 
       return transformOutfitForIOS(outfitData, items || [], outfit.id);
     })
