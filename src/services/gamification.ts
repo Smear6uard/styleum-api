@@ -1176,7 +1176,7 @@ export class GamificationService {
             userId,
             a.xp_reward,
             "achievement",
-            a.id,
+            undefined, // source_id is nullable, description has context
             `Achievement unlocked: ${a.name}`
           );
         }
@@ -1257,7 +1257,7 @@ export class GamificationService {
               userId,
               achievement.xp_reward,
               "achievement",
-              achId,
+              undefined, // source_id is nullable, description has context
               `Achievement unlocked: ${achievement.name}`
             );
 

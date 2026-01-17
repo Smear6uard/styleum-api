@@ -65,9 +65,10 @@ if (missingApnsVars.length > 0) {
 function initializeCronJobs() {
   console.log("[Cron] Initializing internal cron jobs...");
 
-  // Pre-generate outfits at 9:30 AM UTC (3:30 AM Chicago)
+  // Pre-generate outfits at 11:00 PM UTC (5:00 PM Chicago)
+  // This ensures outfits are ready for the next UTC day before midnight
   cron.schedule(
-    "30 9 * * *",
+    "0 23 * * *",
     async () => {
       console.log("[Cron] Starting pre-generate job...");
       try {
@@ -188,7 +189,7 @@ function initializeCronJobs() {
   );
 
   console.log("[Cron] All cron jobs initialized:");
-  console.log("  - Pre-generate outfits: 9:30 AM UTC daily");
+  console.log("  - Pre-generate outfits: 11:00 PM UTC daily (5 PM Chicago)");
   console.log("  - Deliver outfits: Every hour");
   console.log("  - Streak at risk: Every hour (targets 6 PM local)");
   console.log("  - Evening confirmation: Every hour (targets user's preferred time, default 8 PM local)");
