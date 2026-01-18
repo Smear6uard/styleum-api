@@ -44,7 +44,7 @@ users.get("/tier", async (c) => {
   const limits = TIER_LIMITS[tier];
 
   // Get streak freezes info from gamification data
-  const streakFreezesAvailable = gamification?.streak_freezes ?? 0;
+  const streakFreezesAvailable = gamification?.streak_freezes_available ?? 0;
 
   // Calculate max wardrobe items for iOS (use -1 for unlimited)
   const maxWardrobeItems = limits.maxWardrobeItems === Infinity ? -1 : limits.maxWardrobeItems;

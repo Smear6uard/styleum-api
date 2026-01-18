@@ -55,7 +55,7 @@ export interface UserGamification {
   level: number;
   current_streak: number;
   longest_streak: number;
-  streak_freezes: number;
+  streak_freezes_available: number;
   last_activity_date: string | null;
   streak_lost_at: string | null;
   achievements: Record<string, unknown>;

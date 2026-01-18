@@ -96,7 +96,7 @@ subscriptions.get("/tier", async (c) => {
   const limits = TIER_LIMITS[tier];
 
   // Get streak freezes info from gamification data
-  const streakFreezesAvailable = gamification?.streak_freezes ?? 0;
+  const streakFreezesAvailable = gamification?.streak_freezes_available ?? 0;
 
   return c.json({
     tier,
