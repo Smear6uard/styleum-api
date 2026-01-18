@@ -24,7 +24,7 @@ const DEFAULT_OPTIONS: Required<CallRunPodOptions> = {
   maxRetries: 30,
   initialDelayMs: 1000,
   maxDelayMs: 5000,
-  timeoutMs: 120000,
+  timeoutMs: 240000,
 };
 
 async function sleep(ms: number): Promise<void> {
@@ -32,6 +32,32 @@ async function sleep(ms: number): Promise<void> {
 }
 
 export async function callRunPod<T = unknown>(
+  endpointId: string,
+  input: Record<string, unknown>,
+  options: CallRunPodOptions = {}
+): Promise<T> {
+  const maxJobRetries = 1; // Retry once on timeout
+
+  for (let jobAttempt = 0; jobAttempt <= maxJobRetries; jobAttempt++) {
+    try {
+      return await executeRunPodJob<T>(endpointId, input, options);
+    } catch (error) {
+      const isTimeout = error instanceof Error && error.message.includes('timed out');
+      const canRetry = jobAttempt < maxJobRetries && isTimeout;
+
+      if (canRetry) {
+        console.log(`[RunPod] Job timed out for ${endpointId}, retrying in 2s (attempt ${jobAttempt + 2}/${maxJobRetries + 1})`);
+        await sleep(2000);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw new Error('Unreachable');
+}
+
+async function executeRunPodJob<T = unknown>(
   endpointId: string,
   input: Record<string, unknown>,
   options: CallRunPodOptions = {}
