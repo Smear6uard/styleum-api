@@ -38,6 +38,7 @@ import { deliverOutfits } from "./jobs/deliverOutfits.js";
 import { sendStreakAtRiskNotifications } from "./jobs/streakAtRisk.js";
 import { sendEveningConfirmations } from "./jobs/eveningConfirmation.js";
 import { supabaseAdmin } from "./services/supabase.js";
+import { sendPushNotification, isAPNsConfigured } from "./services/apns.js";
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
@@ -471,6 +472,87 @@ app.get("/cron/reset-credits", async (c) => {
       },
       500
     );
+  }
+});
+
+// Test push notification endpoint (for debugging)
+app.post("/api/test/push", async (c) => {
+  // Require auth - only allow authenticated users to test their own notifications
+  const authHeader = c.req.header("authorization");
+  if (!authHeader?.startsWith("Bearer ")) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  // Verify the token with Supabase
+  const token = authHeader.replace("Bearer ", "");
+  const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+  if (authError || !user) {
+    return c.json({ error: "Invalid token", details: authError?.message }, 401);
+  }
+
+  try {
+    const body = await c.req.json();
+    const { userId, title, body: messageBody } = body;
+
+    // Only allow users to test their own notifications (or use their own userId if not specified)
+    const targetUserId = userId || user.id;
+
+    // Get user's push token
+    const { data: profile, error } = await supabaseAdmin
+      .from("user_profiles")
+      .select("push_token, push_enabled, first_name")
+      .eq("id", targetUserId)
+      .single();
+
+    if (error || !profile) {
+      return c.json({ error: "User not found", details: error?.message }, 404);
+    }
+
+    if (!profile.push_token) {
+      return c.json({
+        error: "No push token registered",
+        push_enabled: profile.push_enabled,
+      }, 400);
+    }
+
+    if (!profile.push_enabled) {
+      return c.json({
+        error: "Push notifications disabled for user",
+        has_token: true,
+      }, 400);
+    }
+
+    // Check APNs configuration
+    if (!isAPNsConfigured()) {
+      return c.json({
+        error: "APNs not configured",
+        required_vars: ["APNS_KEY_ID", "APNS_TEAM_ID", "APNS_KEY", "APNS_BUNDLE_ID"],
+      }, 500);
+    }
+
+    // Send test notification
+    const success = await sendPushNotification(profile.push_token, {
+      title: title || "Styleum Test",
+      body: messageBody || `Test notification for ${profile.first_name || "user"}`,
+      data: { type: "test", screen: "home" },
+    });
+
+    console.log(
+      `[APNs] Test notification ${success ? "sent" : "failed"} for user ${targetUserId}`
+    );
+
+    return c.json({
+      success,
+      token_prefix: profile.push_token.slice(0, 8) + "...",
+      environment: process.env.NODE_ENV === "production" ? "production" : "sandbox",
+    });
+  } catch (error) {
+    console.error("[APNs] Test push error:", error);
+    return c.json({
+      error: "Internal error",
+      details: error instanceof Error ? error.message : "Unknown",
+    }, 500);
   }
 });
 
