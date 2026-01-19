@@ -6,6 +6,7 @@
 import { Hono } from "hono";
 import { supabaseAdmin } from "../services/supabase.js";
 import { getUserId } from "../middleware/auth.js";
+import { GamificationService, XP_AMOUNTS } from "../services/gamification.js";
 
 type Variables = {
   userId: string;
@@ -357,6 +358,170 @@ feedRoutes.patch("/publish/:outfit_history_id", async (c) => {
     });
   } catch (error) {
     console.error("[Feed] Error updating caption:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+/**
+ * POST /upload - Upload image for a direct feed post
+ * Accepts multipart FormData with 'image' field
+ * Returns public URL to be used in /post endpoint
+ */
+feedRoutes.post("/upload", async (c) => {
+  const userId = getUserId(c);
+
+  try {
+    const formData = await c.req.formData();
+    const imageFile = formData.get("image") as File | null;
+
+    if (!imageFile) {
+      return c.json({ error: "No image provided" }, 400);
+    }
+
+    // Validate file type
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/heic"];
+    if (!allowedTypes.includes(imageFile.type)) {
+      return c.json(
+        { error: "Invalid file type. Allowed: JPEG, PNG, WebP, HEIC" },
+        400
+      );
+    }
+
+    // Upload to outfit-verifications bucket under posts/{userId}/{timestamp}.{ext}
+    const fileExt = imageFile.name.split(".").pop() || "jpg";
+    const fileName = `posts/${userId}/${Date.now()}.${fileExt}`;
+    const fileBuffer = await imageFile.arrayBuffer();
+
+    const { error: uploadError } = await supabaseAdmin.storage
+      .from("outfit-verifications")
+      .upload(fileName, fileBuffer, {
+        contentType: imageFile.type,
+        upsert: false,
+      });
+
+    if (uploadError) {
+      console.error("[Feed] Failed to upload image:", uploadError);
+      return c.json({ error: "Failed to upload image" }, 500);
+    }
+
+    // Get public URL
+    const { data: urlData } = supabaseAdmin.storage
+      .from("outfit-verifications")
+      .getPublicUrl(fileName);
+
+    console.log(`[Feed] User ${userId} uploaded post image: ${fileName}`);
+
+    return c.json({
+      url: urlData.publicUrl,
+    });
+  } catch (error) {
+    console.error("[Feed] Error uploading image:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+/**
+ * POST /post - Create a direct photo post to the school feed
+ * Body: { photo_url: string, caption?: string, item_ids?: string[] }
+ * Creates a public outfit_history entry without requiring AI-generated outfits
+ */
+feedRoutes.post("/post", async (c) => {
+  const userId = getUserId(c);
+  const body = await c.req.json().catch(() => ({}));
+  const { photo_url, caption, item_ids } = body;
+
+  try {
+    // Validate required fields
+    if (!photo_url || typeof photo_url !== "string") {
+      return c.json({ error: "photo_url is required" }, 400);
+    }
+
+    // Validate caption length
+    if (caption && caption.length > 280) {
+      return c.json({ error: "Caption must be 280 characters or less" }, 400);
+    }
+
+    // Validate item_ids if provided
+    if (item_ids && !Array.isArray(item_ids)) {
+      return c.json({ error: "item_ids must be an array" }, 400);
+    }
+
+    // Verify user has a school set
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from("user_profiles")
+      .select("school_id")
+      .eq("id", userId)
+      .single();
+
+    if (profileError || !profile?.school_id) {
+      return c.json({ error: "You must join a school before posting to the feed" }, 403);
+    }
+
+    // If item_ids provided, verify they belong to the user
+    if (item_ids && item_ids.length > 0) {
+      const { data: items, error: itemsError } = await supabaseAdmin
+        .from("wardrobe_items")
+        .select("id")
+        .eq("user_id", userId)
+        .in("id", item_ids);
+
+      if (itemsError) {
+        console.error("[Feed] Failed to verify items:", itemsError);
+        return c.json({ error: "Failed to verify wardrobe items" }, 500);
+      }
+
+      const foundIds = new Set(items?.map((i) => i.id) || []);
+      const missingIds = item_ids.filter((id: string) => !foundIds.has(id));
+      if (missingIds.length > 0) {
+        return c.json({ error: "Some wardrobe items not found or not owned by user" }, 400);
+      }
+    }
+
+    // Create outfit_history entry
+    const { data: post, error: insertError } = await supabaseAdmin
+      .from("outfit_history")
+      .insert({
+        user_id: userId,
+        items: item_ids || [],
+        photo_url,
+        caption: caption?.substring(0, 280) || null,
+        is_public: true,
+        is_verified: true,
+        verification_type: "photo",
+        worn_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error("[Feed] Failed to create post:", insertError);
+      return c.json({ error: "Failed to create post" }, 500);
+    }
+
+    // Award XP for sharing
+    await GamificationService.awardXP(
+      userId,
+      XP_AMOUNTS.SHARE_OUTFIT,
+      "share_outfit",
+      post.id,
+      "Posted to school feed"
+    );
+
+    console.log(`[Feed] User ${userId} created direct post ${post.id}`);
+
+    return c.json({
+      success: true,
+      post: {
+        id: post.id,
+        photo_url: post.photo_url,
+        caption: post.caption,
+        item_ids: post.items,
+        worn_at: post.worn_at,
+        is_public: post.is_public,
+      },
+    });
+  } catch (error) {
+    console.error("[Feed] Error creating post:", error);
     return c.json({ error: "Internal server error" }, 500);
   }
 });
