@@ -36,6 +36,7 @@ import votesRoutes from "./routes/votes.js";
 import feedRoutes from "./routes/feed.js";
 import leaderboardRoutes from "./routes/leaderboard.js";
 import statusCardRoutes from "./routes/statusCard.js";
+import activityRoutes from "./routes/activity.js";
 import { preGenerateOutfits } from "./jobs/preGenerate.js";
 import { weeklyReset } from "./jobs/weeklyReset.js";
 import { sendMorningNotifications } from "./jobs/sendMorningNotifications.js";
@@ -631,6 +632,7 @@ api.route("/votes", votesRoutes);
 api.route("/feed", feedRoutes);
 api.route("/leaderboard", leaderboardRoutes);
 api.route("/status-card", statusCardRoutes);
+api.route("/activity", activityRoutes);
 
 app.route("/api", api);
 
