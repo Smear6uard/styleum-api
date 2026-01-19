@@ -31,7 +31,13 @@ import usersRoutes from "./routes/users.js";
 import referralsRoutes from "./routes/referrals.js";
 import debugRoutes from "./routes/debug.js";
 import publicRoutes from "./routes/public.js";
+import schoolsRoutes from "./routes/schools.js";
+import votesRoutes from "./routes/votes.js";
+import feedRoutes from "./routes/feed.js";
+import leaderboardRoutes from "./routes/leaderboard.js";
+import statusCardRoutes from "./routes/statusCard.js";
 import { preGenerateOutfits } from "./jobs/preGenerate.js";
+import { weeklyReset } from "./jobs/weeklyReset.js";
 import { sendMorningNotifications } from "./jobs/sendMorningNotifications.js";
 import { dailyGamificationReset } from "./jobs/dailyGamificationReset.js";
 import { deliverOutfits } from "./jobs/deliverOutfits.js";
@@ -146,6 +152,23 @@ function initializeCronJobs() {
     { timezone: "UTC" }
   );
 
+  // Weekly reset (tier promotions/demotions) - Monday 6:00 AM UTC (Sunday 11:59 PM CT)
+  cron.schedule(
+    "0 6 * * 1",
+    async () => {
+      console.log("[Cron] Starting weekly reset job...");
+      try {
+        const result = await weeklyReset();
+        console.log(
+          `[Cron] Weekly reset completed: ${result.promotions} promotions, ${result.demotions} demotions`
+        );
+      } catch (error) {
+        console.error("[Cron] Weekly reset failed:", error);
+      }
+    },
+    { timezone: "UTC" }
+  );
+
   // Monthly credit reset on 1st of each month at midnight UTC
   cron.schedule(
     "0 0 1 * *",
@@ -195,6 +218,7 @@ function initializeCronJobs() {
   console.log("  - Streak at risk: Every hour (targets 6 PM local)");
   console.log("  - Evening confirmation: Every hour (targets user's preferred time, default 8 PM local)");
   console.log("  - Gamification reset: 10:00 AM UTC daily");
+  console.log("  - Weekly reset (tier promotions): Monday 6:00 AM UTC");
   console.log("  - Monthly reset (credits + freezes): 1st of month at midnight UTC");
 }
 
@@ -247,6 +271,9 @@ app.route("/webhooks", webhooksRoutes);
 
 // Public routes (no auth) - for outfit sharing pages
 app.route("/api/public", publicRoutes);
+
+// Schools route (no auth) - for listing schools in app
+app.route("/api/schools", schoolsRoutes);
 
 // Cron endpoint (protected by secret)
 app.get("/cron/pre-generate", async (c) => {
@@ -475,6 +502,34 @@ app.get("/cron/reset-credits", async (c) => {
   }
 });
 
+// Weekly reset cron endpoint (tier promotions/demotions)
+app.get("/cron/weekly-reset", async (c) => {
+  const authHeader = c.req.header("authorization");
+  if (authHeader !== `Bearer ${CRON_SECRET}`) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  console.log("[Cron] Starting weekly reset job via HTTP trigger");
+
+  try {
+    const result = await weeklyReset();
+    return c.json({
+      message: "Weekly reset completed",
+      ...result,
+    });
+  } catch (error) {
+    console.error("[Cron] Weekly reset failed:", error);
+    return c.json(
+      {
+        success: false,
+        error: "Weekly reset failed",
+        message: error instanceof Error ? error.message : "Unknown error",
+      },
+      500
+    );
+  }
+});
+
 // Test push notification endpoint (for debugging)
 app.post("/api/test/push", async (c) => {
   // Require auth - only allow authenticated users to test their own notifications
@@ -571,6 +626,11 @@ api.route("/account", accountRoutes);
 api.route("/users", usersRoutes);
 api.route("/referrals", referralsRoutes);
 api.route("/debug", debugRoutes);
+// Social/Vouch routes
+api.route("/votes", votesRoutes);
+api.route("/feed", feedRoutes);
+api.route("/leaderboard", leaderboardRoutes);
+api.route("/status-card", statusCardRoutes);
 
 app.route("/api", api);
 

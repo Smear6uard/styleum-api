@@ -18,7 +18,13 @@ profile.get("/", async (c) => {
 
   const { data, error } = await supabaseAdmin
     .from("user_profiles")
-    .select("*")
+    .select(`
+      *,
+      schools (
+        slug,
+        name
+      )
+    `)
     .eq("id", userId)
     .single();
 
@@ -31,7 +37,13 @@ profile.get("/", async (c) => {
     return c.json({ error: "Profile not found" }, 404);
   }
 
-  return c.json(data);
+  // Extract school info and flatten response
+  const { schools, ...profile } = data;
+  return c.json({
+    ...profile,
+    school_slug: schools?.slug ?? null,
+    school_name: schools?.name ?? null,
+  });
 });
 
 /**
@@ -211,6 +223,143 @@ profile.post("/tier-onboarding-seen", async (c) => {
     success: true,
     tier_onboarding_seen_at: now,
   });
+});
+
+/**
+ * GET /school - Get user's current school info
+ * Returns school details and tier status
+ */
+profile.get("/school", async (c) => {
+  const userId = getUserId(c);
+
+  const { data: profile, error } = await supabaseAdmin
+    .from("user_profiles")
+    .select(`
+      school_id,
+      tier,
+      tier_updated_at,
+      schools (
+        id,
+        name,
+        short_name,
+        slug,
+        location
+      )
+    `)
+    .eq("id", userId)
+    .single();
+
+  if (error) {
+    console.error("[Profile] Failed to fetch school info:", error);
+    return c.json({ error: "Failed to fetch school info" }, 500);
+  }
+
+  if (!profile.school_id) {
+    return c.json({ school: null, tier: null, tier_updated_at: null });
+  }
+
+  return c.json({
+    school: profile.schools,
+    tier: profile.tier,
+    tier_updated_at: profile.tier_updated_at,
+  });
+});
+
+/**
+ * PATCH /school - Update user's school
+ * Allows user to join a school by slug for campus competition
+ */
+profile.patch("/school", async (c) => {
+  const userId = getUserId(c);
+  const body = await c.req.json().catch(() => ({}));
+
+  const { school_slug, schoolSlug } = body;
+  const slug = school_slug || schoolSlug;
+
+  if (!slug) {
+    return c.json({ error: "school_slug is required" }, 400);
+  }
+
+  try {
+    // Look up school by slug
+    const { data: school, error: schoolError } = await supabaseAdmin
+      .from("schools")
+      .select("id, name, short_name, slug, is_active")
+      .eq("slug", slug)
+      .single();
+
+    if (schoolError || !school) {
+      return c.json({ error: "School not found" }, 404);
+    }
+
+    if (!school.is_active) {
+      return c.json({ error: "This school is not yet active" }, 403);
+    }
+
+    // Update user's school_id and set tier to rookie
+    const { error: updateError } = await supabaseAdmin
+      .from("user_profiles")
+      .update({
+        school_id: school.id,
+        tier: "rookie",
+        tier_updated_at: new Date().toISOString(),
+      })
+      .eq("id", userId);
+
+    if (updateError) {
+      console.error("[Profile] Failed to update school:", updateError);
+      return c.json({ error: "Failed to update school" }, 500);
+    }
+
+    console.log(`[Profile] User ${userId} joined school ${school.name}`);
+
+    return c.json({
+      success: true,
+      school: {
+        id: school.id,
+        name: school.name,
+        short_name: school.short_name,
+        slug: school.slug,
+      },
+    });
+  } catch (error) {
+    console.error("[Profile] Error updating school:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
+});
+
+/**
+ * DELETE /school - Leave current school
+ * Removes user from their current school
+ */
+profile.delete("/school", async (c) => {
+  const userId = getUserId(c);
+
+  try {
+    const { error: updateError } = await supabaseAdmin
+      .from("user_profiles")
+      .update({
+        school_id: null,
+        tier: null,
+        tier_updated_at: null,
+      })
+      .eq("id", userId);
+
+    if (updateError) {
+      console.error("[Profile] Failed to leave school:", updateError);
+      return c.json({ error: "Failed to leave school" }, 500);
+    }
+
+    console.log(`[Profile] User ${userId} left their school`);
+
+    return c.json({
+      success: true,
+      message: "Left school successfully",
+    });
+  } catch (error) {
+    console.error("[Profile] Error leaving school:", error);
+    return c.json({ error: "Internal server error" }, 500);
+  }
 });
 
 export default profile;
