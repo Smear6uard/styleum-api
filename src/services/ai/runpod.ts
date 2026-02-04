@@ -31,6 +31,87 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Network errors that should trigger retry
+const RETRYABLE_ERRORS = [
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'Connection reset',
+  'socket hang up',
+  'network error',
+  'abort',
+];
+
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return RETRYABLE_ERRORS.some(e => message.includes(e.toLowerCase()));
+  }
+  return false;
+}
+
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  context: string
+): Promise<Response> {
+  const maxRetries = 3;
+  const baseDelay = 1000;
+  const fetchTimeout = 90000; // 90 seconds
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), fetchTimeout);
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      // Don't retry on 4xx client errors
+      if (response.status >= 400 && response.status < 500) {
+        return response;
+      }
+
+      // Retry on 5xx server errors
+      if (response.status >= 500 && attempt < maxRetries) {
+        const delay = baseDelay * Math.pow(2, attempt - 1);
+        console.log(`[RunPod] ${context}: Server error ${response.status}, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})`);
+        Sentry.addBreadcrumb({
+          category: 'runpod',
+          message: `Retry attempt ${attempt} for ${context}: Server error ${response.status}`,
+          level: 'warning',
+        });
+        await sleep(delay);
+        continue;
+      }
+
+      return response;
+    } catch (error) {
+      clearTimeout(timeoutId);
+
+      if (attempt < maxRetries && isRetryableError(error)) {
+        const delay = baseDelay * Math.pow(2, attempt - 1);
+        const errorMsg = error instanceof Error ? error.message : 'Network error';
+        console.log(`[RunPod] ${context}: ${errorMsg}, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})`);
+        Sentry.addBreadcrumb({
+          category: 'runpod',
+          message: `Retry attempt ${attempt} for ${context}: ${errorMsg}`,
+          level: 'warning',
+        });
+        await sleep(delay);
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error(`${context}: Max retries exceeded`);
+}
+
 export async function callRunPod<T = unknown>(
   endpointId: string,
   input: Record<string, unknown>,
@@ -70,7 +151,7 @@ async function executeRunPodJob<T = unknown>(
   const startTime = Date.now();
 
   // Initial request using runsync
-  const response = await fetch(
+  const response = await fetchWithRetry(
     `https://api.runpod.ai/v2/${endpointId}/runsync`,
     {
       method: "POST",
@@ -79,7 +160,8 @@ async function executeRunPodJob<T = unknown>(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ input }),
-    }
+    },
+    `runsync ${endpointId}`
   );
 
   if (!response.ok) {
@@ -123,13 +205,14 @@ async function executeRunPodJob<T = unknown>(
     await sleep(delay);
 
     // Poll status
-    const statusResponse = await fetch(
+    const statusResponse = await fetchWithRetry(
       `https://api.runpod.ai/v2/${endpointId}/status/${result.id}`,
       {
         headers: {
           Authorization: `Bearer ${RUNPOD_API_KEY}`,
         },
-      }
+      },
+      `status ${endpointId}/${result.id}`
     );
 
     if (!statusResponse.ok) {
