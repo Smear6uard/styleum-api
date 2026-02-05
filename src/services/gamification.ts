@@ -1249,6 +1249,7 @@ export class GamificationService {
             await supabaseAdmin.from("user_achievements").insert({
               user_id: userId,
               achievement_id: achId,
+              unlocked_at: new Date().toISOString(),
               is_seen: false,
             });
 
