@@ -206,6 +206,8 @@ export class GamificationService {
         };
       }
 
+      console.log(`[XP] Awarded ${amount} XP to ${userId} | source=${source} | sourceId=${sourceId || 'none'} | total=${data.new_total_xp} | level=${data.new_level}${data.level_up ? ' LEVEL UP!' : ''}`);
+
       return {
         success: true,
         new_total_xp: data.new_total_xp,
@@ -1158,26 +1160,19 @@ export class GamificationService {
         const isCompleted = progress >= a.requirement_value;
         const wasAlreadyUnlocked = !!existingUnlock?.unlocked_at;
 
-        // If newly completed, unlock the achievement
+        // If newly completed, mark as unlocked (but do NOT award XP here —
+        // XP is only awarded via checkAndUnlockAchievements() after actions)
         if (isCompleted && !wasAlreadyUnlocked) {
           newlyUnlocked.push(a.id);
-          // Insert into user_achievements
           await supabaseAdmin.from("user_achievements").upsert(
             {
               user_id: userId,
               achievement_id: a.id,
               unlocked_at: new Date().toISOString(),
+              is_unlocked: true,
               is_seen: false,
             },
             { onConflict: "user_id,achievement_id" }
-          );
-          // Award XP for the achievement
-          await this.awardXP(
-            userId,
-            a.xp_reward,
-            "achievement",
-            undefined, // source_id is nullable, description has context
-            `Achievement unlocked: ${a.name}`
           );
         }
 
@@ -1227,7 +1222,8 @@ export class GamificationService {
       const newAchievements: Achievement[] = [];
 
       // Unlock each new achievement
-      for (const achId of data || []) {
+      for (const row of data || []) {
+        const achId = row.achievement_id;
         // Get achievement details
         const { data: achievement } = await supabaseAdmin
           .from("achievements")
@@ -1250,6 +1246,7 @@ export class GamificationService {
               user_id: userId,
               achievement_id: achId,
               unlocked_at: new Date().toISOString(),
+              is_unlocked: true,
               is_seen: false,
             });
 

@@ -22,6 +22,7 @@ import {
   GamificationService,
   XP_AMOUNTS,
 } from "../services/gamification.js";
+import { hasAIConsent } from "../middleware/aiConsent.js";
 
 /**
  * Convert Celsius to Fahrenheit
@@ -253,39 +254,39 @@ outfits.get("/", async (c) => {
     console.log("[OutfitsAPI] Fetched outfit styling_tip values:", preGenerated.map(o => ({ id: o.id, styling_tip: o.styling_tip })));
   }
 
+  // Helper: fetch weather in parallel (reused in both paths)
+  const fetchWeather = async () => {
+    if (!profile?.location_lat || !profile?.location_lng) return null;
+    const weatherData = await getWeatherByCoords(profile.location_lat, profile.location_lng);
+    if (!weatherData) return null;
+    return {
+      temp_fahrenheit: celsiusToFahrenheit(weatherData.temperature),
+      condition: weatherData.condition,
+      humidity: weatherData.humidity,
+      wind_mph: Math.round(weatherData.wind_speed * 2.237),
+      description: weatherData.description,
+    };
+  };
+
   if (!preGenerated || preGenerated.length === 0) {
     console.log(`[Outfits] Serving fallback for user ${userId}`);
 
-    // Fetch random completed items as inspiration
-    const { data: inspirationItems } = await supabaseAdmin
-      .from("wardrobe_items")
-      .select("id, category, processed_image_url, original_image_url, item_name")
-      .eq("user_id", userId)
-      .eq("is_archived", false)
-      .eq("processing_status", "completed")
-      .limit(20);
+    // Run all three independent queries in parallel
+    const [inspirationResult, canGenerate, weather] = await Promise.all([
+      supabaseAdmin
+        .from("wardrobe_items")
+        .select("id, category, processed_image_url, original_image_url, item_name")
+        .eq("user_id", userId)
+        .eq("is_archived", false)
+        .eq("processing_status", "completed")
+        .limit(20),
+      checkUserCanGenerate(userId),
+      fetchWeather(),
+    ]);
 
     // Shuffle and take 3-4
-    const shuffled = (inspirationItems || []).sort(() => Math.random() - 0.5);
+    const shuffled = (inspirationResult.data || []).sort(() => Math.random() - 0.5);
     const selected = shuffled.slice(0, Math.min(4, shuffled.length));
-
-    // Check if user can generate (has top + bottom + shoes)
-    const canGenerate = await checkUserCanGenerate(userId);
-
-    // Fetch weather if user has location (use profile we already fetched)
-    let weather = null;
-    if (profile?.location_lat && profile?.location_lng) {
-      const weatherData = await getWeatherByCoords(profile.location_lat, profile.location_lng);
-      if (weatherData) {
-        weather = {
-          temp_fahrenheit: celsiusToFahrenheit(weatherData.temperature),
-          condition: weatherData.condition,
-          humidity: weatherData.humidity,
-          wind_mph: Math.round(weatherData.wind_speed * 2.237),
-          description: weatherData.description,
-        };
-      }
-    }
 
     return c.json({
       outfits: [],
@@ -304,54 +305,54 @@ outfits.get("/", async (c) => {
     });
   }
 
-  // Transform for iOS
-  const transformedOutfits = await Promise.all(
-    preGenerated.map(async (outfit) => {
-      const { data: items } = await supabaseAdmin
-        .from("wardrobe_items")
-        .select(
-          "id, category, subcategory, processed_image_url, original_image_url, colors, item_name"
-        )
-        .in("id", outfit.items || []);
+  // Collect ALL item IDs from all outfits, fetch in ONE batched query
+  const allItemIds = [...new Set(preGenerated.flatMap((o) => o.items || []))];
 
-      // Map database outfit to GeneratedOutfitData format
-      console.log("[OutfitsAPI] Raw DB outfit.styling_tip:", outfit.styling_tip);
-      const outfitData = {
-        id: outfit.id,
-        item_ids: outfit.items || [],
-        name: outfit.outfit_name || "Styled Outfit",
-        vibe: outfit.vibe || "Casual",
-        reasoning: outfit.reasoning || "",
-        styling_tip: outfit.styling_tip || undefined,
-        color_harmony_description: outfit.color_harmony_description || undefined,
-        style_score: outfit.style_score || 0.8,
-        confidence_score: outfit.confidence_score || 0.8,
-        occasion_match: false,
-      };
-      console.log("[OutfitsAPI] outfitData.styling_tip after mapping:", outfitData.styling_tip);
+  // Fetch items + weather in parallel (single DB query instead of N)
+  const [itemsResult, weather] = await Promise.all([
+    supabaseAdmin
+      .from("wardrobe_items")
+      .select(
+        "id, category, subcategory, processed_image_url, original_image_url, colors, item_name"
+      )
+      .in("id", allItemIds),
+    fetchWeather(),
+  ]);
 
-      return transformOutfitForIOS(outfitData, items || [], outfit.id);
-    })
+  // Build a lookup map for O(1) access
+  const itemsMap = new Map(
+    (itemsResult.data || []).map((item) => [item.id, item])
   );
 
-  // Get weather if user has location (use profile we already fetched above)
-  let weather = null;
-  if (profile?.location_lat && profile?.location_lng) {
-    const weatherData = await getWeatherByCoords(profile.location_lat, profile.location_lng);
-    if (weatherData) {
-      weather = {
-        temp_fahrenheit: celsiusToFahrenheit(weatherData.temperature),
-        condition: weatherData.condition,
-        humidity: weatherData.humidity,
-        wind_mph: Math.round(weatherData.wind_speed * 2.237),
-        description: weatherData.description,
-      };
-    }
-  }
+  // Transform outfits using the pre-fetched items map (no more DB calls)
+  const transformedOutfits = preGenerated.map((outfit) => {
+    const outfitItems = (outfit.items || [])
+      .map((id: string) => itemsMap.get(id))
+      .filter(Boolean) as OutfitItem[];
+
+    const outfitData = {
+      id: outfit.id,
+      item_ids: outfit.items || [],
+      name: outfit.outfit_name || "Styled Outfit",
+      vibe: outfit.vibe || "Casual",
+      reasoning: outfit.reasoning || "",
+      styling_tip: outfit.styling_tip || undefined,
+      color_harmony_description: outfit.color_harmony_description || undefined,
+      style_score: outfit.style_score || 0.8,
+      confidence_score: outfit.confidence_score || 0.8,
+      occasion_match: false,
+    };
+
+    return transformOutfitForIOS(outfitData, outfitItems, outfit.id);
+  });
 
   // Determine source - use first_outfit_auto if any outfit has that source (for iOS celebration)
   const hasFirstOutfit = preGenerated.some((o) => o.source === "first_outfit_auto");
   const source = hasFirstOutfit ? "first_outfit_auto" : "pre_generated";
+
+  // Cache for 30 min — pre-generated outfits don't change within a day
+  c.header("Cache-Control", "private, max-age=1800");
+  c.header("ETag", `"outfits-${userToday}-${preGenerated.map(o => o.id).join("-")}"`);
 
   return c.json({
     outfits: transformedOutfits,
@@ -368,6 +369,11 @@ outfits.get("/", async (c) => {
  */
 outfits.post("/generate", styleMeLimitMiddleware, async (c) => {
   const userId = getUserId(c);
+
+  // Require AI consent before generating outfits
+  if (!(await hasAIConsent(userId))) {
+    return c.json({ error: "AI data consent required before processing" }, 403);
+  }
 
   // Check daily outfit limit first
   const dailyLimit = await checkDailyOutfitLimit(userId);
@@ -910,46 +916,57 @@ outfits.post("/:id/share", async (c) => {
       xp_reward: number;
     } | null = null;
 
-    const shareAchievements = [
-      { threshold: 1, id: "social_butterfly", name: "Social Butterfly", xp: 50 },
-      { threshold: 10, id: "influencer", name: "Influencer", xp: 100 },
-      { threshold: 25, id: "style_ambassador", name: "Style Ambassador", xp: 250 },
+    const shareAchievementIds = [
+      { threshold: 1, id: "social_butterfly" },
+      { threshold: 10, id: "influencer" },
+      { threshold: 25, id: "style_ambassador" },
     ];
 
-    for (const achievement of shareAchievements) {
-      if (totalShares === achievement.threshold) {
+    for (const sa of shareAchievementIds) {
+      if (totalShares === sa.threshold) {
         // Check if not already unlocked
         const { data: existing } = await supabaseAdmin
           .from("user_achievements")
           .select("id")
           .eq("user_id", userId)
-          .eq("achievement_id", achievement.id)
+          .eq("achievement_id", sa.id)
           .maybeSingle();
 
         if (!existing) {
+          // Look up actual achievement from DB for correct XP
+          const { data: achievementData } = await supabaseAdmin
+            .from("achievements")
+            .select("name, xp_reward")
+            .eq("id", sa.id)
+            .single();
+
+          const xpReward = achievementData?.xp_reward ?? 0;
+          const achievementName = achievementData?.name ?? sa.id;
+
           // Unlock achievement
           await supabaseAdmin.from("user_achievements").insert({
             user_id: userId,
-            achievement_id: achievement.id,
+            achievement_id: sa.id,
             unlocked_at: new Date().toISOString(),
+            is_unlocked: true,
           });
 
           // Award achievement XP bonus
           await GamificationService.awardXP(
             userId,
-            achievement.xp,
+            xpReward,
             "achievement",
             undefined,
-            `Unlocked: ${achievement.name}`
+            `Unlocked: ${achievementName}`
           );
 
           unlockedAchievement = {
-            id: achievement.id,
-            name: achievement.name,
-            xp_reward: achievement.xp,
+            id: sa.id,
+            name: achievementName,
+            xp_reward: xpReward,
           };
 
-          console.log(`[Share] User ${userId} unlocked ${achievement.name}`);
+          console.log(`[Share] User ${userId} unlocked ${achievementName}`);
           break;
         }
       }
@@ -1109,6 +1126,11 @@ outfits.get("/history", async (c) => {
  */
 outfits.post("/regenerate", async (c) => {
   const userId = getUserId(c);
+
+  // Require AI consent before generating outfits
+  if (!(await hasAIConsent(userId))) {
+    return c.json({ error: "AI data consent required before processing" }, 403);
+  }
 
   // Check Pro status
   const isPro = await isUserPro(userId);

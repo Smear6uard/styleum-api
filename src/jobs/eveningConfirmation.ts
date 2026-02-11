@@ -39,6 +39,14 @@ export async function sendEveningConfirmations(): Promise<EveningConfirmationRes
     duration_ms: 0,
   };
 
+  // TODO: Re-enable with deep linking post-launch
+  // Disabled: tapping the notification on iOS does nothing (no deep linking)
+  if (process.env.ENABLE_OUTFIT_VERIFICATION !== 'true') {
+    console.log("[EveningConfirmation] Disabled — awaiting deep linking fix. Set ENABLE_OUTFIT_VERIFICATION=true to re-enable.");
+    result.duration_ms = Date.now() - startTime;
+    return result;
+  }
+
   // Check if APNs is configured
   if (!isAPNsConfigured()) {
     console.log("[EveningConfirmation] APNs not configured, skipping");

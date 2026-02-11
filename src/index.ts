@@ -31,6 +31,7 @@ import usersRoutes from "./routes/users.js";
 import referralsRoutes from "./routes/referrals.js";
 import debugRoutes from "./routes/debug.js";
 import publicRoutes from "./routes/public.js";
+import consentRoutes from "./routes/consent.js";
 import { preGenerateOutfits } from "./jobs/preGenerate.js";
 import { sendMorningNotifications } from "./jobs/sendMorningNotifications.js";
 import { dailyGamificationReset } from "./jobs/dailyGamificationReset.js";
@@ -571,6 +572,7 @@ api.route("/account", accountRoutes);
 api.route("/users", usersRoutes);
 api.route("/referrals", referralsRoutes);
 api.route("/debug", debugRoutes);
+api.route("/user/consent", consentRoutes);
 
 app.route("/api", api);
 

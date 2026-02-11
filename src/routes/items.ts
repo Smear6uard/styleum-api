@@ -15,6 +15,7 @@ import {
 } from "../services/gamification.js";
 import { ReferralService } from "../services/referrals.js";
 import { checkAndGenerateFirstOutfit } from "../services/firstOutfit.js";
+import { hasAIConsent } from "../middleware/aiConsent.js";
 
 type Variables = {
   userId: string;
@@ -315,6 +316,11 @@ items.patch("/:id", async (c) => {
 items.post("/", itemUploadLimit, async (c) => {
   const userId = getUserId(c);
 
+  // Require AI consent before processing
+  if (!(await hasAIConsent(userId))) {
+    return c.json({ error: "AI data consent required before processing" }, 403);
+  }
+
   // Check item limit for free users
   const limitCheck = await checkItemLimit(userId);
   if (!limitCheck.allowed) {
@@ -420,6 +426,11 @@ items.post("/", itemUploadLimit, async (c) => {
 // POST /batch - Upload multiple items (max 10)
 items.post("/batch", itemUploadLimit, async (c) => {
   const userId = getUserId(c);
+
+  // Require AI consent before processing
+  if (!(await hasAIConsent(userId))) {
+    return c.json({ error: "AI data consent required before processing" }, 403);
+  }
 
   const body = await c.req.json();
   const { items: itemsToUpload } = body;
