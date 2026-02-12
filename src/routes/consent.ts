@@ -23,16 +23,27 @@ consent.post("/", async (c) => {
     return c.json({ error: "Invalid consent payload" }, 400);
   }
 
+  console.log(`[Consent] Request from user ${userId}: type=${type}, agreed=${agreed}, timestamp=${timestamp}`);
+
   // Update user_profiles
-  const { error: profileError } = await supabaseAdmin
+  const { data: updated, error: profileError } = await supabaseAdmin
     .from("user_profiles")
     .update({ ai_consent_given_at: agreed ? timestamp : null })
-    .eq("id", userId);
+    .eq("id", userId)
+    .select("ai_consent_given_at")
+    .single();
 
   if (profileError) {
     console.error("[Consent] Failed to update profile:", profileError);
     return c.json({ error: "Failed to update consent" }, 500);
   }
+
+  if (!updated) {
+    console.error("[Consent] No profile found for user:", userId);
+    return c.json({ error: "User profile not found" }, 404);
+  }
+
+  console.log(`[Consent] Updated ai_consent_given_at to ${updated.ai_consent_given_at} for user ${userId}`);
 
   // Log to consent_log for audit trail
   await supabaseAdmin.from("consent_log").insert({
